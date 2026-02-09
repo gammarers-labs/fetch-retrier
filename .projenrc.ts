@@ -8,7 +8,7 @@ const project = new typescript.TypeScriptProject({
   typescriptVersion: '5.9.x',
   repository: 'https://github.com/gammarers-labs/fetch-retrier.git',
   releaseToNpm: true,
-  // npmTrustedPublishing: true,
+  npmTrustedPublishing: true,
   npmAccess: javascript.NpmAccess.PUBLIC,
   minNodeVersion: '20.0.0',
   workflowNodeVersion: '24.x',
