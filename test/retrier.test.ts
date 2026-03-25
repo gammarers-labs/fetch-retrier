@@ -1,4 +1,11 @@
-import { fetchRetrier, RequestOptions } from '../src';
+import {
+  fetchRetrier,
+  FetchRetrierAbortError,
+  FetchRetrierAlreadyAbortedError,
+  FetchRetrierHttpError,
+  FetchRetrierNetworkError,
+  RequestOptions,
+} from '../src';
 
 const baseOptions: RequestOptions = {
   retries: 3,
@@ -79,21 +86,35 @@ describe('fetchRetrier', () => {
     }
   });
 
-  it('should throw Error after max retries on retriable status', async () => {
+  it('should throw FetchRetrierHttpError after max retries on retriable status', async () => {
     const retryRes = { ok: false, status: 503, text: () => Promise.resolve('unavailable') } as unknown as Response;
     globalThis.fetch = jest.fn().mockResolvedValue(retryRes);
 
-    await expect(fetchRetrier('https://example.com', { ...baseOptions, retries: 2 })).rejects.toThrow('HTTP 503');
+    let caught: unknown;
+    try {
+      await fetchRetrier('https://example.com', { ...baseOptions, retries: 2 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierHttpError);
+    expect((caught as FetchRetrierHttpError).status).toBe(503);
+    expect((caught as FetchRetrierHttpError).message).toBe('HTTP 503');
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('should throw Error immediately on non-retriable status (e.g. 4xx)', async () => {
+  it('should throw FetchRetrierHttpError immediately on non-retriable status (e.g. 4xx)', async () => {
     const badRes = { ok: false, status: 400, text: () => Promise.resolve('bad request') } as unknown as Response;
     globalThis.fetch = jest.fn().mockResolvedValue(badRes);
 
-    await expect(fetchRetrier('https://example.com', baseOptions)).rejects.toThrow(
-      'Non-retriable HTTP error: 400',
-    );
+    let caught: unknown;
+    try {
+      await fetchRetrier('https://example.com', baseOptions);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierHttpError);
+    expect((caught as FetchRetrierHttpError).status).toBe(400);
+    expect((caught as FetchRetrierHttpError).message).toBe('Non-retriable HTTP error: 400');
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -130,20 +151,41 @@ describe('fetchRetrier', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('should retry on timeout (AbortError) and throw after last attempt', async () => {
+  it('should retry on timeout (AbortError) and throw FetchRetrierAbortError after last attempt', async () => {
     const abortError = new Error('The operation was aborted');
     abortError.name = 'AbortError';
     globalThis.fetch = jest.fn().mockRejectedValue(abortError);
 
-    await expect(fetchRetrier('https://example.com', { ...baseOptions, retries: 2 })).rejects.toThrow('aborted');
+    await expect(fetchRetrier('https://example.com', { ...baseOptions, retries: 2 })).rejects.toThrow(
+      FetchRetrierAbortError,
+    );
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('should retry on TypeError (network error) and throw after last attempt', async () => {
-    globalThis.fetch = jest.fn().mockRejectedValue(new TypeError('fetch failed'));
+  it('should retry on TypeError (network error) and throw FetchRetrierNetworkError after last attempt', async () => {
+    const cause = new TypeError('fetch failed');
+    globalThis.fetch = jest.fn().mockRejectedValue(cause);
 
-    await expect(fetchRetrier('https://example.com', { ...baseOptions, retries: 2 })).rejects.toThrow('fetch failed');
+    let caught: unknown;
+    try {
+      await fetchRetrier('https://example.com', { ...baseOptions, retries: 2 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierNetworkError);
+    expect((caught as FetchRetrierNetworkError).cause).toBe(cause);
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('should throw FetchRetrierAlreadyAbortedError when signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    globalThis.fetch = jest.fn();
+
+    await expect(
+      fetchRetrier('https://example.com', { ...baseOptions, signal: controller.signal }),
+    ).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(0);
   });
 
   it('should throw other errors immediately without retry', async () => {
