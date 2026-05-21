@@ -34,7 +34,6 @@ describe('fetchRetrier', () => {
     expect(res).toBe(mockRes);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(globalThis.fetch).toHaveBeenCalledWith('https://example.com', {
-      headers: undefined,
       signal: expect.any(AbortSignal),
     });
   });
@@ -186,6 +185,50 @@ describe('fetchRetrier', () => {
       fetchRetrier('https://example.com', { ...baseOptions, signal: controller.signal }),
     ).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
     expect(globalThis.fetch).toHaveBeenCalledTimes(0);
+  });
+
+  it('should pass init options (method, body, credentials) to fetch', async () => {
+    const mockRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
+    globalThis.fetch = jest.fn().mockResolvedValue(mockRes);
+
+    const body = JSON.stringify({ name: 'test' });
+    await fetchRetrier('https://example.com/items', {
+      ...baseOptions,
+      init: {
+        method: 'POST',
+        body,
+        credentials: 'include',
+        redirect: 'follow',
+      },
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith('https://example.com/items', {
+      method: 'POST',
+      body,
+      credentials: 'include',
+      redirect: 'follow',
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('should let top-level headers override init.headers', async () => {
+    const mockRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
+    globalThis.fetch = jest.fn().mockResolvedValue(mockRes);
+
+    await fetchRetrier('https://example.com', {
+      ...baseOptions,
+      init: {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+      },
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': '1' },
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith('https://example.com', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': '1' },
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it('should throw other errors immediately without retry', async () => {
