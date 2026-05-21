@@ -1,9 +1,35 @@
 /**
- * Configuration for {@link fetchRetrier}.
+ * Retry-enabled `fetch` wrapper with per-attempt timeout, full-jitter backoff, and typed errors.
+ *
+ * @module fetch-retrier
+ */
+
+/**
+ * `fetch` options forwarded to every attempt, excluding `signal`.
+ *
+ * Use for `method`, `body`, `credentials`, `redirect`, `mode`, `cache`, and other
+ * {@link https://developer.mozilla.org/en-US/docs/Web/API/RequestInit | RequestInit} fields.
+ * Per-attempt abort and timeout are handled internally via `signal` and must not be set here.
+ */
+export type FetchInitOptions = Omit<RequestInit, 'signal'>;
+
+/**
+ * Options for {@link fetchRetrier}: retry policy, timeout, backoff, request payload, and cancellation.
+ *
+ * Request shape is built as `{ ...init, headers?, signal }` on each attempt. Top-level `headers`
+ * override `init.headers` when both are provided.
  */
 export interface RequestOptions {
-  /** Optional HTTP headers sent with each attempt. */
+  /**
+   * HTTP headers sent on every attempt.
+   * When `init.headers` is also set, these values take precedence for duplicate keys.
+   */
   headers?: Record<string, string>;
+  /**
+   * Additional {@link FetchInitOptions} merged into each `fetch` call (e.g. POST `method` and JSON `body`).
+   * The same `init` is reused across retries.
+   */
+  init?: FetchInitOptions;
   /** Maximum number of attempts, including the first. */
   retries: number;
   /** Per-attempt timeout in milliseconds; uses an internal {@link AbortController} when exceeded. */
@@ -18,13 +44,19 @@ export interface RequestOptions {
    */
   signal?: AbortSignal;
   /**
-   * Return `true` to schedule another attempt for this non-OK response.
+   * Invoked after `response.text()` when `response.ok` is false.
+   * Return `true` to schedule another attempt (until `retries` is exhausted).
    * Default: retry on status 429, 500, 502, 503, or 504.
+   *
+   * @param response - Non-OK response from the current attempt
+   * @param body - Response body text from `response.text()`
    */
   shouldRetry?: (response: Response, body: string) => boolean;
 }
 
-/** Error thrown when a request is cancelled by timeout or an external {@link AbortSignal}. */
+/**
+ * Error thrown when a request is cancelled by timeout or an external {@link AbortSignal}.
+ */
 export class FetchRetrierAbortError extends Error {
   override readonly name: string = 'FetchRetrierAbortError';
   /**
@@ -50,12 +82,16 @@ export class FetchRetrierAlreadyAbortedError extends FetchRetrierAbortError {
   }
 }
 
-/** Error thrown when the server returns a non-OK HTTP status and no further retry is performed. */
+/**
+ * Error thrown when the server returns a non-OK HTTP status and no further retry is performed.
+ *
+ * @property status - HTTP status code from the last non-OK response
+ */
 export class FetchRetrierHttpError extends Error {
   override readonly name: string = 'FetchRetrierHttpError';
   /**
    * @param message - Error description
-   * @param status - HTTP status code from the response
+   * @param status - HTTP status code from the last non-OK response
    */
   constructor(
     message: string,
@@ -68,12 +104,14 @@ export class FetchRetrierHttpError extends Error {
 
 /**
  * Error thrown when a fetch fails with a network-level error (e.g. DNS failure, connection refused).
+ *
+ * @property cause - Original error from the underlying `fetch`, when available
  */
 export class FetchRetrierNetworkError extends Error {
   override readonly name: string = 'FetchRetrierNetworkError';
   /**
    * @param message - Human-readable reason (default: `'Network error'`)
-   * @param cause - Original error, if any
+   * @param cause - Original error from the underlying `fetch`, when available
    */
   constructor(message = 'Network error', public readonly cause?: unknown) {
     super(message);
@@ -81,7 +119,9 @@ export class FetchRetrierNetworkError extends Error {
   }
 }
 
-/** Error thrown when an internal invariant fails (should not happen in normal use). */
+/**
+ * Error thrown when an internal invariant fails (should not happen in normal use).
+ */
 export class FetchRetrierUnreachableError extends Error {
   override readonly name: string = 'FetchRetrierUnreachableError';
   /**
@@ -94,28 +134,42 @@ export class FetchRetrierUnreachableError extends Error {
 }
 
 /**
- * Default {@link RequestOptions.shouldRetry} implementation: retry on HTTP 429, 500, 502, 503, 504.
+ * Default {@link RequestOptions.shouldRetry}: retry on HTTP 429, 500, 502, 503, or 504.
+ *
+ * @param res - Response from the failed attempt
+ * @returns `true` when another attempt should be scheduled
  */
 const defaultShouldRetry = (res: Response): boolean => {
   return [429, 500, 502, 503, 504].includes(res.status);
 };
 
 /**
- * Performs `fetch` with retries, a per-attempt timeout, exponential backoff with full jitter,
- * optional {@link RequestOptions.signal} cancellation, and a configurable retry predicate for
- * non-OK responses.
+ * Wraps `fetch` with retries, per-attempt timeout, full-jitter backoff, and optional cancellation.
  *
- * @param url - Request URL
- * @param options - Retries, backoff, timeout, optional abort signal, and optional retry predicate
- * @returns The first successful (OK) {@link Response}
+ * Each attempt calls `fetch(url, { ...options.init, headers?, signal })` with an internal
+ * {@link AbortSignal} for `timeoutMs`. Non-OK responses are retried when `shouldRetry` returns
+ * `true` (default: 429 and 5xx). The same {@link FetchInitOptions} (including `body`) is reused
+ * on every attempt.
+ *
+ * @param url - Request URL passed to `fetch`
+ * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
+ * @returns The first {@link Response} for which `ok` is `true`
  * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt
  * @throws {FetchRetrierHttpError} On a non-OK response that is not retried or after the last attempt
- * @throws {FetchRetrierNetworkError} On a network error on the final attempt
- * @throws {FetchRetrierAbortError} On timeout or external abort on the final attempt
+ * @throws {FetchRetrierNetworkError} On a network `TypeError` after the last attempt
+ * @throws {FetchRetrierAbortError} On timeout or external abort after the last attempt
  * @throws {FetchRetrierUnreachableError} If the retry loop exits without returning (internal bug)
  */
 export const fetchRetrier = async (url: string, options: RequestOptions): Promise<Response> => {
-  const { headers, retries, timeoutMs, baseBackoffMs, signal: externalSignal, shouldRetry = defaultShouldRetry } = options;
+  const {
+    headers,
+    init,
+    retries,
+    timeoutMs,
+    baseBackoffMs,
+    signal: externalSignal,
+    shouldRetry = defaultShouldRetry,
+  } = options;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     if (externalSignal?.aborted) {
@@ -136,7 +190,8 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
 
     try {
       const res = await fetch(url, {
-        headers,
+        ...init,
+        ...(headers !== undefined ? { headers } : {}),
         signal: controller.signal,
       });
 
@@ -182,6 +237,8 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
 };
 
 /**
+ * Delays execution for the given duration (used between retry attempts).
+ *
  * @param ms - Delay in milliseconds
  * @returns A promise that resolves after `ms`
  */
