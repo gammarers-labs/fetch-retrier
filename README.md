@@ -1,6 +1,6 @@
 # Fetch Retrier
 
-A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeout**, and **full jitter** backoff. Pass standard `RequestInit` options (`method`, `body`, `credentials`, and more) for POST/PUT APIs and other HTTP calls that may be rate-limited (429) or temporarily unavailable (5xx).
+A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeout**, **full jitter** backoff, and **option validation**. Pass standard `RequestInit` options (`method`, `body`, `credentials`, and more) for POST/PUT APIs and other HTTP calls that may be rate-limited or temporarily unavailable.
 
 [![npm version](https://img.shields.io/npm/v/fetch-retrier.svg)](https://www.npmjs.com/package/fetch-retrier)
 [![npm downloads](https://img.shields.io/npm/dm/fetch-retrier.svg)](https://www.npmjs.com/package/fetch-retrier)
@@ -9,14 +9,16 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 
 ## Features
 
-- **Configurable retries** – Set the maximum number of attempts per request.
-- **Per-attempt timeout** – Abort each attempt when it exceeds a given duration.
-- **Full jitter backoff** – Exponential backoff with random jitter (AWS-style) between retries.
+- **Configurable retries** – Set the maximum number of attempts per request (`retries >= 1`).
+- **Per-attempt timeout** – Abort each attempt when it exceeds a given duration (`timeoutMs > 0`).
+- **Full jitter backoff** – Exponential backoff with random jitter (AWS-style) between retries (`baseBackoffMs >= 0`).
+- **Option validation** – Invalid numeric options throw `FetchRetrierInvalidOptionsError` at call time.
 - **RequestInit forwarding** – Pass `method`, `body`, `credentials`, `redirect`, and other `fetch` options via `init` on every attempt.
 - **Header shorthand** – Optional top-level `headers` override `init.headers` when both are set.
-- **Custom retry predicate** – Control which responses trigger a retry (default: 429, 500, 502, 503, 504).
+- **Default retry policy** – Retries transient HTTP statuses (408, 425, 429, 500, 502, 503, 504) via `defaultShouldRetry` and `DEFAULT_RETRYABLE_HTTP_STATUSES`.
+- **Extensible retry predicate** – Compose `defaultShouldRetry` with custom `shouldRetry` logic.
 - **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests.
-- **Typed errors** – `FetchRetrierHttpError`, `FetchRetrierNetworkError`, `FetchRetrierAbortError`, and related classes.
+- **Typed errors** – `FetchRetrierHttpError`, `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierInvalidOptionsError`, and related classes.
 - **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
 
 ## Installation
@@ -80,17 +82,27 @@ The same `init` (including `body`) is applied on every retry attempt. Per-attemp
 
 ### Custom retry logic
 
+Extend the default predicate instead of reimplementing the status list:
+
 ```typescript
+import {
+  DEFAULT_RETRYABLE_HTTP_STATUSES,
+  defaultShouldRetry,
+  fetchRetrier,
+} from 'fetch-retrier';
+
 const response = await fetchRetrier('https://api.example.com/data', {
   retries: 5,
   timeoutMs: 10000,
   baseBackoffMs: 500,
   shouldRetry: (res, body) => {
-    if ([429, 500, 502, 503].includes(res.status)) return true;
+    if (defaultShouldRetry(res, body)) return true;
     if (res.status === 200 && body.includes('"retry": true')) return true;
     return false;
   },
 });
+
+// DEFAULT_RETRYABLE_HTTP_STATUSES is [408, 425, 429, 500, 502, 503, 504]
 ```
 
 ### Cancellation with `AbortController`
@@ -111,6 +123,7 @@ await fetchRetrier('https://api.example.com/data', {
 ### Retry and error behavior
 
 - **Success** – If `response.ok` is true, the response is returned immediately.
+- **Invalid options** – If `retries < 1`, `timeoutMs <= 0`, or `baseBackoffMs < 0`, `FetchRetrierInvalidOptionsError` is thrown before any request is made.
 - **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits (full jitter backoff) and retries until `retries` is exhausted. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status`).
 - **Non-retriable failure** – If `shouldRetry` returns false, `FetchRetrierHttpError` is thrown immediately (e.g. `Non-retriable HTTP error: 404`).
 - **Timeout** – If a request exceeds `timeoutMs`, it is aborted and retried until `retries` is exhausted; the final failure is `FetchRetrierAbortError`.
@@ -121,13 +134,20 @@ await fetchRetrier('https://api.example.com/data', {
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `retries` | `number` | Yes | Maximum number of attempts (including the first request). |
-| `timeoutMs` | `number` | Yes | Timeout in milliseconds for each attempt. Exceeded attempts are aborted and retried. |
-| `baseBackoffMs` | `number` | Yes | Base delay in milliseconds for backoff. Delay is capped at `baseBackoffMs * 2^attempt` and randomized (full jitter). |
+| `retries` | `number` | Yes | Maximum number of attempts (including the first request). Must be `>= 1`. |
+| `timeoutMs` | `number` | Yes | Timeout in milliseconds for each attempt. Exceeded attempts are aborted and retried. Must be `> 0`. |
+| `baseBackoffMs` | `number` | Yes | Base delay in milliseconds for backoff. Delay is capped at `baseBackoffMs * 2^attempt` and randomized (full jitter). Must be `>= 0` (`0` skips backoff delay). |
 | `init` | `FetchInitOptions` | No | `fetch` options forwarded to every attempt: `method`, `body`, `credentials`, `redirect`, `mode`, `cache`, etc. `signal` is reserved for internal timeout and cancellation. |
 | `headers` | `Record<string, string>` | No | Headers sent on every attempt. Overrides `init.headers` when both are set. |
 | `signal` | `AbortSignal` | No | External abort signal. If already aborted, `FetchRetrierAlreadyAbortedError` is thrown. If aborted during an attempt, the request is aborted and retried until `retries` is exhausted. |
-| `shouldRetry` | `(response: Response, body: string) => boolean` | No | Called after `response.text()` when `response.ok` is false. Return `true` to retry. Default: 429, 500, 502, 503, 504. |
+| `shouldRetry` | `(response: Response, body: string) => boolean` | No | Called after `response.text()` when `response.ok` is false. Return `true` to retry. Default: `defaultShouldRetry` (statuses in `DEFAULT_RETRYABLE_HTTP_STATUSES`: 408, 425, 429, 500, 502, 503, 504). |
+
+### Exported helpers
+
+| Export | Description |
+|--------|-------------|
+| `defaultShouldRetry` | Default `shouldRetry` predicate; compose with custom logic. |
+| `DEFAULT_RETRYABLE_HTTP_STATUSES` | Readonly list of HTTP status codes retried by default. |
 
 ## Requirements
 
@@ -136,4 +156,4 @@ await fetchRetrier('https://api.example.com/data', {
 
 ## License
 
-This project is licensed under the (Apache-2.0) License.
+This project is licensed under the Apache-2.0 License.

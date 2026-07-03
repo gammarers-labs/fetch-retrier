@@ -1,5 +1,5 @@
 /**
- * Retry-enabled `fetch` wrapper with per-attempt timeout, full-jitter backoff, and typed errors.
+ * Retry-enabled `fetch` wrapper with per-attempt timeout, full-jitter backoff, option validation, and typed errors.
  *
  * @module fetch-retrier
  */
@@ -18,6 +18,9 @@ export type FetchInitOptions = Omit<RequestInit, 'signal'>;
  *
  * Request shape is built as `{ ...init, headers?, signal }` on each attempt. Top-level `headers`
  * override `init.headers` when both are provided.
+ *
+ * Numeric fields are validated when {@link fetchRetrier} is called; invalid values throw
+ * {@link FetchRetrierInvalidOptionsError}.
  */
 export interface RequestOptions {
   /**
@@ -30,12 +33,19 @@ export interface RequestOptions {
    * The same `init` is reused across retries.
    */
   init?: FetchInitOptions;
-  /** Maximum number of attempts, including the first. */
+  /**
+   * Maximum number of attempts, including the first.
+   * Must be `>= 1`.
+   */
   retries: number;
-  /** Per-attempt timeout in milliseconds; uses an internal {@link AbortController} when exceeded. */
+  /**
+   * Per-attempt timeout in milliseconds; uses an internal {@link AbortController} when exceeded.
+   * Must be `> 0`.
+   */
   timeoutMs: number;
   /**
    * Base backoff in milliseconds for full jitter. The cap for attempt `n` is `baseBackoffMs * 2^n`.
+   * Must be `>= 0` (`0` skips backoff delay between attempts).
    */
   baseBackoffMs: number;
   /**
@@ -46,10 +56,11 @@ export interface RequestOptions {
   /**
    * Invoked after `response.text()` when `response.ok` is false.
    * Return `true` to schedule another attempt (until `retries` is exhausted).
-   * Default: retry on status 429, 500, 502, 503, or 504.
+   * Default: {@link defaultShouldRetry} (see {@link DEFAULT_RETRYABLE_HTTP_STATUSES}).
    *
    * @param response - Non-OK response from the current attempt
    * @param body - Response body text from `response.text()`
+   * @returns `true` to schedule another attempt (until `retries` is exhausted)
    */
   shouldRetry?: (response: Response, body: string) => boolean;
 }
@@ -120,6 +131,24 @@ export class FetchRetrierNetworkError extends Error {
 }
 
 /**
+ * Error thrown when {@link RequestOptions} contains invalid numeric values.
+ *
+ * Subclass of {@link TypeError} for compatibility with `instanceof TypeError`. Distinct from
+ * network-level `TypeError` values thrown by `fetch`, which are retried and surfaced as
+ * {@link FetchRetrierNetworkError} after the last attempt.
+ */
+export class FetchRetrierInvalidOptionsError extends TypeError {
+  override readonly name: string = 'FetchRetrierInvalidOptionsError';
+  /**
+   * @param message - Human-readable reason describing the invalid option
+   */
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, FetchRetrierInvalidOptionsError.prototype);
+  }
+}
+
+/**
  * Error thrown when an internal invariant fails (should not happen in normal use).
  */
 export class FetchRetrierUnreachableError extends Error {
@@ -134,13 +163,47 @@ export class FetchRetrierUnreachableError extends Error {
 }
 
 /**
- * Default {@link RequestOptions.shouldRetry}: retry on HTTP 429, 500, 502, 503, or 504.
+ * HTTP status codes retried by default when {@link RequestOptions.shouldRetry} is omitted.
  *
- * @param res - Response from the failed attempt
+ * Includes transient client/server errors: 408, 425, 429, and common 5xx gateway or overload responses.
+ */
+export const DEFAULT_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 425, 429, 500, 502, 503, 504];
+
+/**
+ * Default {@link RequestOptions.shouldRetry}: retries responses whose status is in
+ * {@link DEFAULT_RETRYABLE_HTTP_STATUSES}.
+ *
+ * Compose with custom logic, for example:
+ * `(res, body) => defaultShouldRetry(res, body) || res.status === 418`.
+ *
+ * @param response - Response from the failed attempt
+ * @param _body - Response body text (unused by the default predicate)
  * @returns `true` when another attempt should be scheduled
  */
-const defaultShouldRetry = (res: Response): boolean => {
-  return [429, 500, 502, 503, 504].includes(res.status);
+export const defaultShouldRetry = (response: Response, _body: string): boolean => {
+  return DEFAULT_RETRYABLE_HTTP_STATUSES.includes(response.status);
+};
+
+/**
+ * Validates retry policy numeric fields on {@link RequestOptions}.
+ *
+ * Constraints: `retries >= 1`, `timeoutMs > 0`, `baseBackoffMs >= 0`.
+ *
+ * @param options - Options whose `retries`, `timeoutMs`, and `baseBackoffMs` are checked
+ * @throws {FetchRetrierInvalidOptionsError} When any constraint is violated
+ */
+const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeoutMs' | 'baseBackoffMs'>): void => {
+  const { retries, timeoutMs, baseBackoffMs } = options;
+
+  if (retries < 1) {
+    throw new FetchRetrierInvalidOptionsError('retries must be >= 1');
+  }
+  if (timeoutMs <= 0) {
+    throw new FetchRetrierInvalidOptionsError('timeoutMs must be > 0');
+  }
+  if (baseBackoffMs < 0) {
+    throw new FetchRetrierInvalidOptionsError('baseBackoffMs must be >= 0');
+  }
 };
 
 /**
@@ -148,12 +211,13 @@ const defaultShouldRetry = (res: Response): boolean => {
  *
  * Each attempt calls `fetch(url, { ...options.init, headers?, signal })` with an internal
  * {@link AbortSignal} for `timeoutMs`. Non-OK responses are retried when `shouldRetry` returns
- * `true` (default: 429 and 5xx). The same {@link FetchInitOptions} (including `body`) is reused
+ * `true` (default: {@link DEFAULT_RETRYABLE_HTTP_STATUSES}). The same {@link FetchInitOptions} (including `body`) is reused
  * on every attempt.
  *
  * @param url - Request URL passed to `fetch`
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
  * @returns The first {@link Response} for which `ok` is `true`
+ * @throws {FetchRetrierInvalidOptionsError} If `retries < 1`, `timeoutMs <= 0`, or `baseBackoffMs < 0`
  * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt
  * @throws {FetchRetrierHttpError} On a non-OK response that is not retried or after the last attempt
  * @throws {FetchRetrierNetworkError} On a network `TypeError` after the last attempt
@@ -170,6 +234,8 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
     signal: externalSignal,
     shouldRetry = defaultShouldRetry,
   } = options;
+
+  validateRequestOptions({ retries, timeoutMs, baseBackoffMs });
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     if (externalSignal?.aborted) {

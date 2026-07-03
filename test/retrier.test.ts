@@ -1,8 +1,11 @@
 import {
+  DEFAULT_RETRYABLE_HTTP_STATUSES,
+  defaultShouldRetry,
   fetchRetrier,
   FetchRetrierAbortError,
   FetchRetrierAlreadyAbortedError,
   FetchRetrierHttpError,
+  FetchRetrierInvalidOptionsError,
   FetchRetrierNetworkError,
   RequestOptions,
 } from '../src';
@@ -67,9 +70,8 @@ describe('fetchRetrier', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('should retry on retriable status codes 500, 502, 503, 504', async () => {
-    const statuses = [500, 502, 503, 504];
-    for (const status of statuses) {
+  it('should retry on default retriable status codes', async () => {
+    for (const status of DEFAULT_RETRYABLE_HTTP_STATUSES) {
       globalThis.fetch = originalFetch;
       const successRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
       const retryRes = { ok: false, status, text: () => Promise.resolve('error') } as unknown as Response;
@@ -83,6 +85,23 @@ describe('fetchRetrier', () => {
       expect(res).toBe(successRes);
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     }
+  });
+
+  it('should extend defaultShouldRetry with additional status codes', async () => {
+    const successRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
+    const retryRes = { ok: false, status: 418, text: () => Promise.resolve('teapot') } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    const res = await fetchRetrier('https://example.com', {
+      ...baseOptions,
+      shouldRetry: (response, body) => defaultShouldRetry(response, body) || response.status === 418,
+    });
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
   it('should throw FetchRetrierHttpError after max retries on retriable status', async () => {
@@ -235,6 +254,35 @@ describe('fetchRetrier', () => {
     globalThis.fetch = jest.fn().mockRejectedValue(new Error('Something else'));
 
     await expect(fetchRetrier('https://example.com', baseOptions)).rejects.toThrow('Something else');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['retries', { retries: 0 }, 'retries must be >= 1'],
+    ['retries (negative)', { retries: -1 }, 'retries must be >= 1'],
+    ['timeoutMs (zero)', { timeoutMs: 0 }, 'timeoutMs must be > 0'],
+    ['timeoutMs (negative)', { timeoutMs: -100 }, 'timeoutMs must be > 0'],
+    ['baseBackoffMs (negative)', { baseBackoffMs: -1 }, 'baseBackoffMs must be >= 0'],
+  ])('should throw FetchRetrierInvalidOptionsError for invalid %s', async (_label, overrides, message) => {
+    globalThis.fetch = jest.fn();
+
+    let caught: unknown;
+    try {
+      await fetchRetrier('https://example.com', { ...baseOptions, ...overrides });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierInvalidOptionsError);
+    expect((caught as FetchRetrierInvalidOptionsError).message).toBe(message);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('should allow baseBackoffMs of 0', async () => {
+    const mockRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
+    globalThis.fetch = jest.fn().mockResolvedValue(mockRes);
+
+    await fetchRetrier('https://example.com', { ...baseOptions, baseBackoffMs: 0 });
+
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 });
