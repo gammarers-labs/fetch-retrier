@@ -1,4 +1,6 @@
 import {
+  DEFAULT_RETRYABLE_HTTP_STATUSES,
+  defaultShouldRetry,
   fetchRetrier,
   FetchRetrierAbortError,
   FetchRetrierAlreadyAbortedError,
@@ -68,9 +70,8 @@ describe('fetchRetrier', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('should retry on retriable status codes 500, 502, 503, 504', async () => {
-    const statuses = [500, 502, 503, 504];
-    for (const status of statuses) {
+  it('should retry on default retriable status codes', async () => {
+    for (const status of DEFAULT_RETRYABLE_HTTP_STATUSES) {
       globalThis.fetch = originalFetch;
       const successRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
       const retryRes = { ok: false, status, text: () => Promise.resolve('error') } as unknown as Response;
@@ -84,6 +85,23 @@ describe('fetchRetrier', () => {
       expect(res).toBe(successRes);
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     }
+  });
+
+  it('should extend defaultShouldRetry with additional status codes', async () => {
+    const successRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
+    const retryRes = { ok: false, status: 418, text: () => Promise.resolve('teapot') } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    const res = await fetchRetrier('https://example.com', {
+      ...baseOptions,
+      shouldRetry: (response, body) => defaultShouldRetry(response, body) || response.status === 418,
+    });
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
   it('should throw FetchRetrierHttpError after max retries on retriable status', async () => {

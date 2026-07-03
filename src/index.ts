@@ -56,7 +56,7 @@ export interface RequestOptions {
   /**
    * Invoked after `response.text()` when `response.ok` is false.
    * Return `true` to schedule another attempt (until `retries` is exhausted).
-   * Default: retry on status 429, 500, 502, 503, or 504.
+   * Default: {@link defaultShouldRetry} (see {@link DEFAULT_RETRYABLE_HTTP_STATUSES}).
    *
    * @param response - Non-OK response from the current attempt
    * @param body - Response body text from `response.text()`
@@ -163,13 +163,25 @@ export class FetchRetrierUnreachableError extends Error {
 }
 
 /**
- * Default {@link RequestOptions.shouldRetry}: retry on HTTP 429, 500, 502, 503, or 504.
+ * HTTP status codes retried by default when {@link RequestOptions.shouldRetry} is omitted.
  *
- * @param res - Response from the failed attempt
+ * Includes transient client/server errors: 408, 425, 429, and common 5xx gateway or overload responses.
+ */
+export const DEFAULT_RETRYABLE_HTTP_STATUSES: readonly number[] = [408, 425, 429, 500, 502, 503, 504];
+
+/**
+ * Default {@link RequestOptions.shouldRetry}: retries responses whose status is in
+ * {@link DEFAULT_RETRYABLE_HTTP_STATUSES}.
+ *
+ * Compose with custom logic, for example:
+ * `(res, body) => defaultShouldRetry(res, body) || res.status === 418`.
+ *
+ * @param response - Response from the failed attempt
+ * @param _body - Response body text (unused by the default predicate)
  * @returns `true` when another attempt should be scheduled
  */
-const defaultShouldRetry = (res: Response): boolean => {
-  return [429, 500, 502, 503, 504].includes(res.status);
+export const defaultShouldRetry = (response: Response, _body: string): boolean => {
+  return DEFAULT_RETRYABLE_HTTP_STATUSES.includes(response.status);
 };
 
 /**
@@ -199,7 +211,7 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
  *
  * Each attempt calls `fetch(url, { ...options.init, headers?, signal })` with an internal
  * {@link AbortSignal} for `timeoutMs`. Non-OK responses are retried when `shouldRetry` returns
- * `true` (default: 429 and 5xx). The same {@link FetchInitOptions} (including `body`) is reused
+ * `true` (default: {@link DEFAULT_RETRYABLE_HTTP_STATUSES}). The same {@link FetchInitOptions} (including `body`) is reused
  * on every attempt.
  *
  * @param url - Request URL passed to `fetch`
