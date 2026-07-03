@@ -3,6 +3,7 @@ import {
   FetchRetrierAbortError,
   FetchRetrierAlreadyAbortedError,
   FetchRetrierHttpError,
+  FetchRetrierInvalidOptionsError,
   FetchRetrierNetworkError,
   RequestOptions,
 } from '../src';
@@ -235,6 +236,35 @@ describe('fetchRetrier', () => {
     globalThis.fetch = jest.fn().mockRejectedValue(new Error('Something else'));
 
     await expect(fetchRetrier('https://example.com', baseOptions)).rejects.toThrow('Something else');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['retries', { retries: 0 }, 'retries must be >= 1'],
+    ['retries (negative)', { retries: -1 }, 'retries must be >= 1'],
+    ['timeoutMs (zero)', { timeoutMs: 0 }, 'timeoutMs must be > 0'],
+    ['timeoutMs (negative)', { timeoutMs: -100 }, 'timeoutMs must be > 0'],
+    ['baseBackoffMs (negative)', { baseBackoffMs: -1 }, 'baseBackoffMs must be >= 0'],
+  ])('should throw FetchRetrierInvalidOptionsError for invalid %s', async (_label, overrides, message) => {
+    globalThis.fetch = jest.fn();
+
+    let caught: unknown;
+    try {
+      await fetchRetrier('https://example.com', { ...baseOptions, ...overrides });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierInvalidOptionsError);
+    expect((caught as FetchRetrierInvalidOptionsError).message).toBe(message);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('should allow baseBackoffMs of 0', async () => {
+    const mockRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
+    globalThis.fetch = jest.fn().mockResolvedValue(mockRes);
+
+    await fetchRetrier('https://example.com', { ...baseOptions, baseBackoffMs: 0 });
+
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 });
