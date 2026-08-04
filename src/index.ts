@@ -1,5 +1,6 @@
 /**
- * Retry-enabled `fetch` wrapper with per-attempt timeout, full-jitter backoff, option validation, and typed errors.
+ * Retry-enabled `fetch` wrapper with per-attempt timeout, Retry-After support, full-jitter backoff,
+ * option validation, and typed errors.
  *
  * @module fetch-retrier
  */
@@ -14,7 +15,8 @@
 export type FetchInitOptions = Omit<RequestInit, 'signal'>;
 
 /**
- * Options for {@link fetchRetrier}: retry policy, timeout, backoff, request payload, and cancellation.
+ * Options for {@link fetchRetrier}: retry policy, timeout, backoff (including `Retry-After`),
+ * request payload, and cancellation.
  *
  * Request shape is built as `{ ...init, headers?, signal }` on each attempt. Top-level `headers`
  * override `init.headers` when both are provided.
@@ -44,8 +46,9 @@ export interface RequestOptions {
    */
   timeoutMs: number;
   /**
-   * Base backoff in milliseconds for full jitter. The cap for attempt `n` is `baseBackoffMs * 2^n`.
-   * Must be `>= 0` (`0` skips backoff delay between attempts).
+   * Base backoff in milliseconds for full jitter when `Retry-After` is absent or invalid.
+   * The cap for attempt `n` is `baseBackoffMs * 2^n`.
+   * Must be `>= 0` (`0` skips backoff delay between attempts when falling back to jitter).
    */
   baseBackoffMs: number;
   /**
@@ -96,17 +99,23 @@ export class FetchRetrierAlreadyAbortedError extends FetchRetrierAbortError {
 /**
  * Error thrown when the server returns a non-OK HTTP status and no further retry is performed.
  *
+ * Carries the last response `status` and the body text already consumed via `response.text()`
+ * (the same text passed to {@link RequestOptions.shouldRetry}).
+ *
  * @property status - HTTP status code from the last non-OK response
+ * @property body - Response body text already read via `response.text()` for that attempt
  */
 export class FetchRetrierHttpError extends Error {
   override readonly name: string = 'FetchRetrierHttpError';
   /**
    * @param message - Error description
    * @param status - HTTP status code from the last non-OK response
+   * @param body - Response body text already read via `response.text()` for that attempt
    */
   constructor(
     message: string,
     public readonly status: number,
+    public readonly body: string,
   ) {
     super(message);
     Object.setPrototypeOf(this, FetchRetrierHttpError.prototype);
@@ -207,12 +216,15 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
 };
 
 /**
- * Wraps `fetch` with retries, per-attempt timeout, full-jitter backoff, and optional cancellation.
+ * Wraps `fetch` with retries, per-attempt timeout, Retry-After support, full-jitter backoff, and
+ * optional cancellation.
  *
  * Each attempt calls `fetch(url, { ...options.init, headers?, signal })` with an internal
  * {@link AbortSignal} for `timeoutMs`. Non-OK responses are retried when `shouldRetry` returns
- * `true` (default: {@link DEFAULT_RETRYABLE_HTTP_STATUSES}). The same {@link FetchInitOptions} (including `body`) is reused
- * on every attempt.
+ * `true` (default: {@link defaultShouldRetry}). Between HTTP retries, a valid `Retry-After`
+ * header (delta-seconds or HTTP-date) is preferred over full jitter; abort and network retries
+ * always use full jitter. The same {@link FetchInitOptions} (including `body`) is reused on
+ * every attempt.
  *
  * @param url - Request URL passed to `fetch`
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
@@ -220,6 +232,7 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
  * @throws {FetchRetrierInvalidOptionsError} If `retries < 1`, `timeoutMs <= 0`, or `baseBackoffMs < 0`
  * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt
  * @throws {FetchRetrierHttpError} On a non-OK response that is not retried or after the last attempt
+ *   (includes `status` and `body`)
  * @throws {FetchRetrierNetworkError} On a network `TypeError` after the last attempt
  * @throws {FetchRetrierAbortError} On timeout or external abort after the last attempt
  * @throws {FetchRetrierUnreachableError} If the retry loop exits without returning (internal bug)
@@ -273,11 +286,11 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
 
       if (isContinue) {
         if (attempt === retries) {
-          throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status);
+          throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
         }
-        await wait(fullJitter(baseBackoffMs, attempt));
+        await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt));
       } else {
-        throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status);
+        throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status, text);
       }
     } catch (err: unknown) {
       clearTimeout(timer);
@@ -315,6 +328,9 @@ const wait = (ms: number): Promise<void> => {
 /**
  * Full jitter backoff: random delay in `[0, base * 2^attempt)` ms (AWS-recommended pattern).
  *
+ * Used between abort/network retries, and as the fallback when HTTP retries lack a usable
+ * `Retry-After` header.
+ *
  * @param base - Base backoff in milliseconds
  * @param attempt - 1-based attempt index (first retry uses `attempt === 1`)
  * @returns Wait duration in milliseconds before the next attempt
@@ -322,4 +338,70 @@ const wait = (ms: number): Promise<void> => {
 const fullJitter = (base: number, attempt: number): number => {
   const cap = base * Math.pow(2, attempt);
   return Math.floor(Math.random() * cap);
+};
+
+/**
+ * Parses a `Retry-After` header value into a delay in milliseconds.
+ *
+ * Supports RFC 7231 forms: non-negative integer delta-seconds, or an HTTP-date. Empty values,
+ * non-integer numerics (e.g. floats or negatives), and unparsable dates yield `undefined` so
+ * callers can fall back to full jitter. An HTTP-date in the past yields `0`.
+ *
+ * @param value - Raw `Retry-After` header value
+ * @param nowMs - Current time in milliseconds (injectable for tests)
+ * @returns Delay in milliseconds, or `undefined` when the value cannot be parsed
+ */
+export const parseRetryAfterMs = (value: string, nowMs: number = Date.now()): number | undefined => {
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return undefined;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10) * 1000;
+  }
+
+  // Reject other numeric forms (floats, negatives); not valid delta-seconds or HTTP-date.
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) {
+    return undefined;
+  }
+
+  return Math.max(0, dateMs - nowMs);
+};
+
+/**
+ * Chooses the delay before the next HTTP retry: prefer a valid `Retry-After`, else full jitter.
+ *
+ * Reads `response.headers.get('Retry-After')` and parses it with {@link parseRetryAfterMs}.
+ * Missing headers, or values that parse to `undefined`, fall back to {@link fullJitter}.
+ * Abort and network retries do not use this helper.
+ *
+ * @param response - Non-OK response from the current attempt
+ * @param baseBackoffMs - Base backoff passed to {@link fullJitter} when falling back
+ * @param attempt - 1-based attempt index
+ * @param nowMs - Current time in milliseconds (injectable for tests)
+ * @returns Wait duration in milliseconds before the next attempt
+ */
+const resolveRetryDelayMs = (
+  response: Response,
+  baseBackoffMs: number,
+  attempt: number,
+  nowMs: number = Date.now(),
+): number => {
+  const header = response.headers?.get('Retry-After');
+  if (header == null) {
+    return fullJitter(baseBackoffMs, attempt);
+  }
+
+  const fromHeader = parseRetryAfterMs(header, nowMs);
+  if (fromHeader === undefined) {
+    return fullJitter(baseBackoffMs, attempt);
+  }
+
+  return fromHeader;
 };

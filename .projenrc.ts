@@ -2,10 +2,11 @@ import { typescript, javascript, github } from 'projen';
 const project = new typescript.TypeScriptProject({
   defaultReleaseBranch: 'main',
   name: 'fetch-retrier',
+  packageManager: javascript.NodePackageManager.NPM,
   projenrcTs: true,
   authorName: 'yicr',
   authorEmail: 'yicr@users.noreply.github.com',
-  typescriptVersion: '5.9.x',
+  typescriptVersion: '6.0.x',
   repository: 'https://github.com/gammarers-labs/fetch-retrier.git',
   releaseToNpm: true,
   npmTrustedPublishing: true,
