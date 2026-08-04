@@ -97,16 +97,19 @@ export class FetchRetrierAlreadyAbortedError extends FetchRetrierAbortError {
  * Error thrown when the server returns a non-OK HTTP status and no further retry is performed.
  *
  * @property status - HTTP status code from the last non-OK response
+ * @property body - Response body text already read via `response.text()` for that attempt
  */
 export class FetchRetrierHttpError extends Error {
   override readonly name: string = 'FetchRetrierHttpError';
   /**
    * @param message - Error description
    * @param status - HTTP status code from the last non-OK response
+   * @param body - Response body text already read via `response.text()` for that attempt
    */
   constructor(
     message: string,
     public readonly status: number,
+    public readonly body: string,
   ) {
     super(message);
     Object.setPrototypeOf(this, FetchRetrierHttpError.prototype);
@@ -273,11 +276,11 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
 
       if (isContinue) {
         if (attempt === retries) {
-          throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status);
+          throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
         }
         await wait(fullJitter(baseBackoffMs, attempt));
       } else {
-        throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status);
+        throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status, text);
       }
     } catch (err: unknown) {
       clearTimeout(timer);

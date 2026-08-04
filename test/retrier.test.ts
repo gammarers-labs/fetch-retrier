@@ -116,6 +116,7 @@ describe('fetchRetrier', () => {
     }
     expect(caught).toBeInstanceOf(FetchRetrierHttpError);
     expect((caught as FetchRetrierHttpError).status).toBe(503);
+    expect((caught as FetchRetrierHttpError).body).toBe('unavailable');
     expect((caught as FetchRetrierHttpError).message).toBe('HTTP 503');
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
@@ -132,6 +133,7 @@ describe('fetchRetrier', () => {
     }
     expect(caught).toBeInstanceOf(FetchRetrierHttpError);
     expect((caught as FetchRetrierHttpError).status).toBe(400);
+    expect((caught as FetchRetrierHttpError).body).toBe('bad request');
     expect((caught as FetchRetrierHttpError).message).toBe('Non-retriable HTTP error: 400');
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
@@ -160,12 +162,19 @@ describe('fetchRetrier', () => {
     const retryRes = { ok: false, status: 503, text: () => Promise.resolve('') } as unknown as Response;
     globalThis.fetch = jest.fn().mockResolvedValue(retryRes);
 
-    await expect(
-      fetchRetrier('https://example.com', {
+    let caught: unknown;
+    try {
+      await fetchRetrier('https://example.com', {
         ...baseOptions,
         shouldRetry: () => false,
-      }),
-    ).rejects.toThrow('Non-retriable HTTP error: 503');
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierHttpError);
+    expect((caught as FetchRetrierHttpError).status).toBe(503);
+    expect((caught as FetchRetrierHttpError).body).toBe('');
+    expect((caught as FetchRetrierHttpError).message).toBe('Non-retriable HTTP error: 503');
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
