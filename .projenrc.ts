@@ -2,6 +2,7 @@ import { typescript, javascript, github } from 'projen';
 const project = new typescript.TypeScriptProject({
   defaultReleaseBranch: 'main',
   name: 'fetch-retrier',
+  packageManager: javascript.NodePackageManager.NPM,
   projenrcTs: true,
   authorName: 'yicr',
   authorEmail: 'yicr@users.noreply.github.com',
