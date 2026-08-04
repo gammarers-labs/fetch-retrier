@@ -5,7 +5,7 @@ const project = new typescript.TypeScriptProject({
   projenrcTs: true,
   authorName: 'yicr',
   authorEmail: 'yicr@users.noreply.github.com',
-  typescriptVersion: '5.9.x',
+  typescriptVersion: '6.0.x',
   repository: 'https://github.com/gammarers-labs/fetch-retrier.git',
   releaseToNpm: true,
   npmTrustedPublishing: true,
