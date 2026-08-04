@@ -1,5 +1,6 @@
 /**
- * Retry-enabled `fetch` wrapper with per-attempt timeout, full-jitter backoff, option validation, and typed errors.
+ * Retry-enabled `fetch` wrapper with per-attempt timeout, Retry-After support, full-jitter backoff,
+ * option validation, and typed errors.
  *
  * @module fetch-retrier
  */
@@ -44,8 +45,9 @@ export interface RequestOptions {
    */
   timeoutMs: number;
   /**
-   * Base backoff in milliseconds for full jitter. The cap for attempt `n` is `baseBackoffMs * 2^n`.
-   * Must be `>= 0` (`0` skips backoff delay between attempts).
+   * Base backoff in milliseconds for full jitter when `Retry-After` is absent or invalid.
+   * The cap for attempt `n` is `baseBackoffMs * 2^n`.
+   * Must be `>= 0` (`0` skips backoff delay between attempts when falling back to jitter).
    */
   baseBackoffMs: number;
   /**
@@ -210,12 +212,14 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
 };
 
 /**
- * Wraps `fetch` with retries, per-attempt timeout, full-jitter backoff, and optional cancellation.
+ * Wraps `fetch` with retries, per-attempt timeout, Retry-After support, full-jitter backoff, and
+ * optional cancellation.
  *
  * Each attempt calls `fetch(url, { ...options.init, headers?, signal })` with an internal
  * {@link AbortSignal} for `timeoutMs`. Non-OK responses are retried when `shouldRetry` returns
- * `true` (default: {@link DEFAULT_RETRYABLE_HTTP_STATUSES}). The same {@link FetchInitOptions} (including `body`) is reused
- * on every attempt.
+ * `true` (default: {@link DEFAULT_RETRYABLE_HTTP_STATUSES}). Between HTTP retries, a valid
+ * `Retry-After` header (delta-seconds or HTTP-date) is preferred over full jitter. The same
+ * {@link FetchInitOptions} (including `body`) is reused on every attempt.
  *
  * @param url - Request URL passed to `fetch`
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
@@ -278,7 +282,7 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
         if (attempt === retries) {
           throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
         }
-        await wait(fullJitter(baseBackoffMs, attempt));
+        await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt));
       } else {
         throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status, text);
       }
@@ -325,4 +329,65 @@ const wait = (ms: number): Promise<void> => {
 const fullJitter = (base: number, attempt: number): number => {
   const cap = base * Math.pow(2, attempt);
   return Math.floor(Math.random() * cap);
+};
+
+/**
+ * Parses a `Retry-After` header value into a delay in milliseconds.
+ *
+ * Supports RFC 7231 forms: non-negative delta-seconds, or an HTTP-date. Invalid or empty values
+ * yield `undefined` so callers can fall back to full jitter.
+ *
+ * @param value - Raw `Retry-After` header value
+ * @param nowMs - Current time in milliseconds (injectable for tests)
+ * @returns Delay in milliseconds, or `undefined` when the value cannot be parsed
+ */
+export const parseRetryAfterMs = (value: string, nowMs: number = Date.now()): number | undefined => {
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return undefined;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return Number.parseInt(trimmed, 10) * 1000;
+  }
+
+  // Reject other numeric forms (floats, negatives); not valid delta-seconds or HTTP-date.
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) {
+    return undefined;
+  }
+
+  return Math.max(0, dateMs - nowMs);
+};
+
+/**
+ * Chooses the delay before the next HTTP retry: prefer a valid `Retry-After`, else full jitter.
+ *
+ * @param response - Non-OK response from the current attempt
+ * @param baseBackoffMs - Base backoff passed to {@link fullJitter} when falling back
+ * @param attempt - 1-based attempt index
+ * @param nowMs - Current time in milliseconds (injectable for tests)
+ * @returns Wait duration in milliseconds before the next attempt
+ */
+const resolveRetryDelayMs = (
+  response: Response,
+  baseBackoffMs: number,
+  attempt: number,
+  nowMs: number = Date.now(),
+): number => {
+  const header = response.headers?.get('Retry-After');
+  if (header == null) {
+    return fullJitter(baseBackoffMs, attempt);
+  }
+
+  const fromHeader = parseRetryAfterMs(header, nowMs);
+  if (fromHeader === undefined) {
+    return fullJitter(baseBackoffMs, attempt);
+  }
+
+  return fromHeader;
 };
