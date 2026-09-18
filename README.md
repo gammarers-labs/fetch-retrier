@@ -1,9 +1,9 @@
 # Fetch Retrier
 
-[![npm version](https://img.shields.io/npm/v/fetch-retrier.svg)](https://www.npmjs.com/package/fetch-retrier)
-[![npm downloads](https://img.shields.io/npm/dm/fetch-retrier.svg)](https://www.npmjs.com/package/fetch-retrier)
-[![build](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/build.yml/badge.svg)](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/build.yml)
-[![release](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/release.yml/badge.svg)](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/release.yml)
+[![npm version](https://img.shields.io/npm/v/fetch-retrier?style=flat-square)](https://www.npmjs.com/package/fetch-retrier)
+[![license](https://img.shields.io/npm/l/fetch-retrier?style=flat-square)](https://www.npmjs.com/package/fetch-retrier)
+[![Node.js](https://img.shields.io/node/v/fetch-retrier?style=flat-square)](https://www.npmjs.com/package/fetch-retrier)
+[![build](https://img.shields.io/github/actions/workflow/status/gammarers-labs/fetch-retrier/build.yml?branch=main&label=build&style=flat-square)](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/build.yml)
 
 A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeout**, **Retry-After** support, **full jitter** backoff, and **option validation**. Pass standard `RequestInit` options (`method`, `body`, `credentials`, and more) for POST/PUT APIs and other HTTP calls that may be rate-limited or temporarily unavailable.
 
@@ -22,18 +22,38 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 - **Typed errors** – All failures extend `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, and `FetchRetrierInvalidOptionsError`.
 - **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
 
+## How it works
+
+Options are validated, then each attempt sends the same URL and `init`/`headers` with an internal timeout. If `response.ok` is true, that response is returned. Otherwise `shouldRetry` decides whether to wait and try again. HTTP retries prefer a valid `Retry-After` header; abort and network retries use full jitter. After the last attempt, a subclass of `FetchRetrierError` is thrown.
+
+- **Success** – If `response.ok` is true, the response is returned immediately.
+- **Package errors** – Failures from this package extend `FetchRetrierError`. Catch the base, or a subclass for a specific case.
+- **Invalid options** – If `retries < 1`, `timeoutMs <= 0`, `baseBackoffMs < 0`, or `maxBackoffMs` is set and `< 0`, `FetchRetrierInvalidOptionsError` is thrown before any request is made. This is not a `TypeError`.
+- **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits and retries until `retries` is exhausted. Wait prefers a valid `Retry-After` header (delta-seconds or HTTP-date); otherwise uses full jitter. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status` and `body`).
+- **Non-retriable failure** – If `shouldRetry` returns false, `FetchRetrierHttpError` is thrown immediately with `status` and `body` (e.g. `Non-retriable HTTP error: 404`).
+- **Timeout** – If a request exceeds `timeoutMs`, that attempt is aborted and retried with full jitter until `retries` is exhausted. Timeout is per-attempt and does not cancel later attempts. The final failure is `FetchRetrierAbortError`.
+- **External abort (in-flight)** – If `signal` is aborted during an attempt, the in-flight request is aborted. On the last attempt, the failure is `FetchRetrierAbortError`. If retries remain, the next attempt sees the still-aborted signal and throws `FetchRetrierAlreadyAbortedError` (no further request is made).
+- **Network / TypeError** – Network errors are retried with full jitter; after the last attempt, `FetchRetrierNetworkError` is thrown with the original error as `cause`.
+- **Already aborted signal** – If `signal` is already aborted before an attempt starts, `FetchRetrierAlreadyAbortedError` is thrown (no attempt is made).
+
 ## Installation
 
-**npm**
+### npm
 
 ```bash
 npm install fetch-retrier
 ```
 
-**yarn**
+### yarn
 
 ```bash
 yarn add fetch-retrier
+```
+
+### pnpm
+
+```bash
+pnpm add fetch-retrier
 ```
 
 ## Usage
@@ -175,18 +195,6 @@ try {
   throw err;
 }
 ```
-
-### Retry and error behavior
-
-- **Success** – If `response.ok` is true, the response is returned immediately.
-- **Package errors** – Failures from this package extend `FetchRetrierError`. Catch the base, or a subclass for a specific case.
-- **Invalid options** – If `retries < 1`, `timeoutMs <= 0`, `baseBackoffMs < 0`, or `maxBackoffMs` is set and `< 0`, `FetchRetrierInvalidOptionsError` is thrown before any request is made. This is not a `TypeError`.
-- **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits and retries until `retries` is exhausted. Wait prefers a valid `Retry-After` header (delta-seconds or HTTP-date); otherwise uses full jitter. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status` and `body`).
-- **Non-retriable failure** – If `shouldRetry` returns false, `FetchRetrierHttpError` is thrown immediately with `status` and `body` (e.g. `Non-retriable HTTP error: 404`).
-- **Timeout** – If a request exceeds `timeoutMs`, that attempt is aborted and retried with full jitter until `retries` is exhausted. Timeout is per-attempt and does not cancel later attempts. The final failure is `FetchRetrierAbortError`.
-- **External abort (in-flight)** – If `signal` is aborted during an attempt, the in-flight request is aborted. On the last attempt, the failure is `FetchRetrierAbortError`. If retries remain, the next attempt sees the still-aborted signal and throws `FetchRetrierAlreadyAbortedError` (no further request is made).
-- **Network / TypeError** – Network errors are retried with full jitter; after the last attempt, `FetchRetrierNetworkError` is thrown with the original error as `cause`.
-- **Already aborted signal** – If `signal` is already aborted before an attempt starts, `FetchRetrierAlreadyAbortedError` is thrown (no attempt is made).
 
 ## Options
 
