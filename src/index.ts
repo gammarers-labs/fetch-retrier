@@ -14,6 +14,7 @@ import {
   FetchRetrierNetworkError,
   FetchRetrierUnreachableError,
 } from './core/errors';
+import { isLastAttempt } from './core/retry-predicates';
 
 export {
   FetchRetrierAbortError,
@@ -228,7 +229,7 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
         throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status, text);
       }
 
-      if (attempt === retries) {
+      if (isLastAttempt(attempt, retries)) {
         throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
       }
 
@@ -238,13 +239,17 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
       externalSignal?.removeEventListener('abort', onExternalAbort);
 
       if (err instanceof Error && err.name === 'AbortError') {
-        if (attempt === retries) throw err instanceof FetchRetrierAbortError ? err : new FetchRetrierAbortError();
+        if (isLastAttempt(attempt, retries)) {
+          throw err instanceof FetchRetrierAbortError ? err : new FetchRetrierAbortError();
+        }
         await wait(fullJitter(baseBackoffMs, attempt, maxBackoffMs));
         continue;
       }
 
       if (err instanceof TypeError) {
-        if (attempt === retries) throw new FetchRetrierNetworkError('Network error', err);
+        if (isLastAttempt(attempt, retries)) {
+          throw new FetchRetrierNetworkError('Network error', err);
+        }
         await wait(fullJitter(baseBackoffMs, attempt, maxBackoffMs));
         continue;
       }
