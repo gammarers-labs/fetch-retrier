@@ -8,6 +8,7 @@ const project = new typescript.TypeScriptProject({
   authorEmail: 'yicr@users.noreply.github.com',
   typescriptVersion: '6.0.x',
   repository: 'https://github.com/gammarers-labs/fetch-retrier.git',
+  description: 'Retry-enabled fetch wrapper with per-attempt timeout, Retry-After support, full-jitter backoff, and option validation.',
   releaseToNpm: true,
   npmTrustedPublishing: true,
   npmAccess: javascript.NpmAccess.PUBLIC,

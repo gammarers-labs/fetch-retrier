@@ -1,5 +1,6 @@
 {
   "name": "fetch-retrier",
+  "description": "Retry-enabled fetch wrapper with per-attempt timeout, Retry-After support, full-jitter backoff, and option validation.",
   "repository": {
     "type": "git",
     "url": "https://github.com/gammarers-labs/fetch-retrier.git"
