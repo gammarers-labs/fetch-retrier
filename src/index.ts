@@ -224,14 +224,15 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
       const text = await res.text();
       const isContinue = shouldRetry(res, text);
 
-      if (isContinue) {
-        if (attempt === retries) {
-          throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
-        }
-        await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt, maxBackoffMs));
-      } else {
+      if (!isContinue) {
         throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status, text);
       }
+
+      if (attempt === retries) {
+        throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
+      }
+
+      await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt, maxBackoffMs));
     } catch (err: unknown) {
       clearTimeout(timer);
       externalSignal?.removeEventListener('abort', onExternalAbort);
