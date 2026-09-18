@@ -26,6 +26,39 @@ const headersWith = (entries: Record<string, string>): Headers => {
   } as Headers;
 };
 
+/**
+ * Stays pending until the per-attempt `signal` aborts, then rejects with `AbortError`.
+ * Used to exercise `onExternalAbort` while a request is in flight.
+ */
+const hangingFetchUntilAbort = (
+  _url: Parameters<typeof fetch>[0],
+  init?: RequestInit,
+): Promise<Response> => {
+  return new Promise((_resolve, reject) => {
+    const signal = init?.signal;
+    if (signal == null) {
+      reject(new Error('Missing abort signal'));
+      return;
+    }
+
+    signal.addEventListener('abort', () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      reject(err);
+    });
+  });
+};
+
+const lastFetchSignal = (): AbortSignal | undefined => {
+  const fetchMock = globalThis.fetch as jest.MockedFunction<typeof fetch>;
+  const init = fetchMock.mock.calls[0]?.[1];
+  const signal = init?.signal;
+  if (signal == null) {
+    return undefined;
+  }
+  return signal;
+};
+
 describe('fetchRetrier', () => {
   const originalFetch = globalThis.fetch;
 
@@ -224,6 +257,51 @@ describe('fetchRetrier', () => {
       fetchRetrier('https://example.com', { ...baseOptions, signal: controller.signal }),
     ).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
     expect(globalThis.fetch).toHaveBeenCalledTimes(0);
+  });
+
+  it('should abort the in-flight request and throw FetchRetrierAbortError on last-attempt external abort', async () => {
+    globalThis.fetch = jest.fn(hangingFetchUntilAbort);
+    const controller = new AbortController();
+
+    // fetchRetrier awaits fetch before returning, so the listener is already attached.
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      retries: 1,
+      signal: controller.signal,
+    });
+    const attemptSignal = lastFetchSignal();
+
+    controller.abort();
+
+    let caught: unknown;
+    try {
+      await promise;
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(FetchRetrierAbortError);
+    expect(caught).not.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
+    expect(attemptSignal?.aborted).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should throw FetchRetrierAlreadyAbortedError when aborted in flight with retries remaining', async () => {
+    globalThis.fetch = jest.fn(hangingFetchUntilAbort);
+    const controller = new AbortController();
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      retries: 2,
+      baseBackoffMs: 0,
+      signal: controller.signal,
+    });
+    const attemptSignal = lastFetchSignal();
+
+    controller.abort();
+
+    await expect(promise).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
+    expect(attemptSignal?.aborted).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
   it('should pass init options (method, body, credentials) to fetch', async () => {

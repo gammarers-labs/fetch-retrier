@@ -52,8 +52,11 @@ export interface RequestOptions {
    */
   baseBackoffMs: number;
   /**
-   * Optional external {@link AbortSignal}. When aborted, the in-flight request is aborted; on the
-   * final attempt, cancellation surfaces as {@link FetchRetrierAbortError}.
+   * Optional external {@link AbortSignal}. When aborted during an attempt, the in-flight request
+   * is aborted. On the last attempt this surfaces as {@link FetchRetrierAbortError}. If retries
+   * remain, the next attempt sees the still-aborted signal and throws
+   * {@link FetchRetrierAlreadyAbortedError}. Distinct from per-attempt timeout, which retries
+   * remaining attempts and only then throws {@link FetchRetrierAbortError}.
    */
   signal?: AbortSignal;
   /**
@@ -69,7 +72,9 @@ export interface RequestOptions {
 }
 
 /**
- * Error thrown when a request is cancelled by timeout or an external {@link AbortSignal}.
+ * Error thrown when the last attempt is cancelled by per-attempt timeout or an in-flight
+ * external {@link AbortSignal}. Remaining retries after an external abort throw
+ * {@link FetchRetrierAlreadyAbortedError} instead, because the signal stays aborted.
  */
 export class FetchRetrierAbortError extends Error {
   override readonly name: string = 'FetchRetrierAbortError';
@@ -230,11 +235,13 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
  * @returns The first {@link Response} for which `ok` is `true`
  * @throws {FetchRetrierInvalidOptionsError} If `retries < 1`, `timeoutMs <= 0`, or `baseBackoffMs < 0`
- * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt
+ * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt,
+ *   including the next attempt after an in-flight external abort while retries remain
  * @throws {FetchRetrierHttpError} On a non-OK response that is not retried or after the last attempt
  *   (includes `status` and `body`)
  * @throws {FetchRetrierNetworkError} On a network `TypeError` after the last attempt
- * @throws {FetchRetrierAbortError} On timeout or external abort after the last attempt
+ * @throws {FetchRetrierAbortError} On per-attempt timeout after the last attempt, or external abort
+ *   on the last attempt
  * @throws {FetchRetrierUnreachableError} If the retry loop exits without returning (internal bug)
  */
 export const fetchRetrier = async (url: string, options: RequestOptions): Promise<Response> => {
