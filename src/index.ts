@@ -47,10 +47,17 @@ export interface RequestOptions {
   timeoutMs: number;
   /**
    * Base backoff in milliseconds for full jitter when `Retry-After` is absent or invalid.
-   * The cap for attempt `n` is `baseBackoffMs * 2^n`.
+   * The exponential span for attempt `n` is `baseBackoffMs * 2^n`, then the result is clipped
+   * by {@link RequestOptions.maxBackoffMs} when that option is set.
    * Must be `>= 0` (`0` skips backoff delay between attempts when falling back to jitter).
    */
   baseBackoffMs: number;
+  /**
+   * Optional ceiling in milliseconds applied to the full-jitter delay.
+   * When set, `Math.min(jitter, maxBackoffMs)` is used. Does not clip a valid `Retry-After`.
+   * Must be `>= 0` when provided (`0` skips jitter wait). Omitted means no extra clip.
+   */
+  maxBackoffMs?: number;
   /**
    * Optional external {@link AbortSignal}. When aborted during an attempt, the in-flight request
    * is aborted. On the last attempt this surfaces as {@link FetchRetrierAbortError}. If retries
@@ -72,11 +79,29 @@ export interface RequestOptions {
 }
 
 /**
+ * Base class for every error thrown by this package.
+ *
+ * Catch {@link FetchRetrierError} to handle any library failure, or a subclass for a specific
+ * case. Distinct from native `fetch` `TypeError` and `AbortError` values, which are wrapped
+ * before they leave {@link fetchRetrier}.
+ */
+export class FetchRetrierError extends Error {
+  override readonly name: string = 'FetchRetrierError';
+  /**
+   * @param message - Human-readable reason
+   */
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, FetchRetrierError.prototype);
+  }
+}
+
+/**
  * Error thrown when the last attempt is cancelled by per-attempt timeout or an in-flight
  * external {@link AbortSignal}. Remaining retries after an external abort throw
  * {@link FetchRetrierAlreadyAbortedError} instead, because the signal stays aborted.
  */
-export class FetchRetrierAbortError extends Error {
+export class FetchRetrierAbortError extends FetchRetrierError {
   override readonly name: string = 'FetchRetrierAbortError';
   /**
    * @param message - Human-readable reason (default: `'Aborted'`)
@@ -110,7 +135,7 @@ export class FetchRetrierAlreadyAbortedError extends FetchRetrierAbortError {
  * @property status - HTTP status code from the last non-OK response
  * @property body - Response body text already read via `response.text()` for that attempt
  */
-export class FetchRetrierHttpError extends Error {
+export class FetchRetrierHttpError extends FetchRetrierError {
   override readonly name: string = 'FetchRetrierHttpError';
   /**
    * @param message - Error description
@@ -132,7 +157,7 @@ export class FetchRetrierHttpError extends Error {
  *
  * @property cause - Original error from the underlying `fetch`, when available
  */
-export class FetchRetrierNetworkError extends Error {
+export class FetchRetrierNetworkError extends FetchRetrierError {
   override readonly name: string = 'FetchRetrierNetworkError';
   /**
    * @param message - Human-readable reason (default: `'Network error'`)
@@ -147,11 +172,11 @@ export class FetchRetrierNetworkError extends Error {
 /**
  * Error thrown when {@link RequestOptions} contains invalid numeric values.
  *
- * Subclass of {@link TypeError} for compatibility with `instanceof TypeError`. Distinct from
- * network-level `TypeError` values thrown by `fetch`, which are retried and surfaced as
+ * Extends {@link FetchRetrierError}, not {@link TypeError}, so it is not treated as a network
+ * failure. Native `fetch` `TypeError` values are retried and surfaced as
  * {@link FetchRetrierNetworkError} after the last attempt.
  */
-export class FetchRetrierInvalidOptionsError extends TypeError {
+export class FetchRetrierInvalidOptionsError extends FetchRetrierError {
   override readonly name: string = 'FetchRetrierInvalidOptionsError';
   /**
    * @param message - Human-readable reason describing the invalid option
@@ -165,7 +190,7 @@ export class FetchRetrierInvalidOptionsError extends TypeError {
 /**
  * Error thrown when an internal invariant fails (should not happen in normal use).
  */
-export class FetchRetrierUnreachableError extends Error {
+export class FetchRetrierUnreachableError extends FetchRetrierError {
   override readonly name: string = 'FetchRetrierUnreachableError';
   /**
    * @param message - Human-readable reason (default: `'Unreachable'`)
@@ -201,13 +226,17 @@ export const defaultShouldRetry = (response: Response, _body: string): boolean =
 /**
  * Validates retry policy numeric fields on {@link RequestOptions}.
  *
- * Constraints: `retries >= 1`, `timeoutMs > 0`, `baseBackoffMs >= 0`.
+ * Constraints: `retries >= 1`, `timeoutMs > 0`, `baseBackoffMs >= 0`, and when set
+ * `maxBackoffMs >= 0`.
  *
- * @param options - Options whose `retries`, `timeoutMs`, and `baseBackoffMs` are checked
+ * @param options - Options whose `retries`, `timeoutMs`, `baseBackoffMs`, and optional
+ *   `maxBackoffMs` are checked
  * @throws {FetchRetrierInvalidOptionsError} When any constraint is violated
  */
-const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeoutMs' | 'baseBackoffMs'>): void => {
-  const { retries, timeoutMs, baseBackoffMs } = options;
+const validateRequestOptions = (
+  options: Pick<RequestOptions, 'retries' | 'timeoutMs' | 'baseBackoffMs' | 'maxBackoffMs'>,
+): void => {
+  const { retries, timeoutMs, baseBackoffMs, maxBackoffMs } = options;
 
   if (retries < 1) {
     throw new FetchRetrierInvalidOptionsError('retries must be >= 1');
@@ -217,6 +246,9 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
   }
   if (baseBackoffMs < 0) {
     throw new FetchRetrierInvalidOptionsError('baseBackoffMs must be >= 0');
+  }
+  if (maxBackoffMs !== undefined && maxBackoffMs < 0) {
+    throw new FetchRetrierInvalidOptionsError('maxBackoffMs must be >= 0');
   }
 };
 
@@ -228,13 +260,16 @@ const validateRequestOptions = (options: Pick<RequestOptions, 'retries' | 'timeo
  * {@link AbortSignal} for `timeoutMs`. Non-OK responses are retried when `shouldRetry` returns
  * `true` (default: {@link defaultShouldRetry}). Between HTTP retries, a valid `Retry-After`
  * header (delta-seconds or HTTP-date) is preferred over full jitter; abort and network retries
- * always use full jitter. The same {@link FetchInitOptions} (including `body`) is reused on
+ * always use full jitter. Optional {@link RequestOptions.maxBackoffMs} clips the jitter result,
+ * not a valid `Retry-After`. The same {@link FetchInitOptions} (including `body`) is reused on
  * every attempt.
  *
  * @param url - Request URL passed to `fetch`
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
  * @returns The first {@link Response} for which `ok` is `true`
- * @throws {FetchRetrierInvalidOptionsError} If `retries < 1`, `timeoutMs <= 0`, or `baseBackoffMs < 0`
+ * @throws {FetchRetrierError} All failures from this function are subclasses of this class
+ * @throws {FetchRetrierInvalidOptionsError} If `retries < 1`, `timeoutMs <= 0`, `baseBackoffMs < 0`,
+ *   or `maxBackoffMs` is set and `< 0`
  * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt,
  *   including the next attempt after an in-flight external abort while retries remain
  * @throws {FetchRetrierHttpError} On a non-OK response that is not retried or after the last attempt
@@ -251,11 +286,12 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
     retries,
     timeoutMs,
     baseBackoffMs,
+    maxBackoffMs,
     signal: externalSignal,
     shouldRetry = defaultShouldRetry,
   } = options;
 
-  validateRequestOptions({ retries, timeoutMs, baseBackoffMs });
+  validateRequestOptions({ retries, timeoutMs, baseBackoffMs, maxBackoffMs });
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     if (externalSignal?.aborted) {
@@ -295,7 +331,7 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
         if (attempt === retries) {
           throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
         }
-        await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt));
+        await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt, maxBackoffMs));
       } else {
         throw new FetchRetrierHttpError(`Non-retriable HTTP error: ${res.status}`, res.status, text);
       }
@@ -305,13 +341,13 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
 
       if (err instanceof Error && err.name === 'AbortError') {
         if (attempt === retries) throw err instanceof FetchRetrierAbortError ? err : new FetchRetrierAbortError();
-        await wait(fullJitter(baseBackoffMs, attempt));
+        await wait(fullJitter(baseBackoffMs, attempt, maxBackoffMs));
         continue;
       }
 
       if (err instanceof TypeError) {
         if (attempt === retries) throw new FetchRetrierNetworkError('Network error', err);
-        await wait(fullJitter(baseBackoffMs, attempt));
+        await wait(fullJitter(baseBackoffMs, attempt, maxBackoffMs));
         continue;
       }
 
@@ -336,15 +372,21 @@ const wait = (ms: number): Promise<void> => {
  * Full jitter backoff: random delay in `[0, base * 2^attempt)` ms (AWS-recommended pattern).
  *
  * Used between abort/network retries, and as the fallback when HTTP retries lack a usable
- * `Retry-After` header.
+ * `Retry-After` header. When `maxBackoffMs` is set, the computed delay is clipped with
+ * `Math.min(delay, maxBackoffMs)`.
  *
  * @param base - Base backoff in milliseconds
  * @param attempt - 1-based attempt index (first retry uses `attempt === 1`)
+ * @param maxBackoffMs - Optional ceiling applied to the jitter result
  * @returns Wait duration in milliseconds before the next attempt
  */
-const fullJitter = (base: number, attempt: number): number => {
+const fullJitter = (base: number, attempt: number, maxBackoffMs?: number): number => {
   const cap = base * Math.pow(2, attempt);
-  return Math.floor(Math.random() * cap);
+  const delay = Math.floor(Math.random() * cap);
+  if (maxBackoffMs === undefined) {
+    return delay;
+  }
+  return Math.min(delay, maxBackoffMs);
 };
 
 /**
@@ -391,6 +433,7 @@ export const parseRetryAfterMs = (value: string, nowMs: number = Date.now()): nu
  * @param response - Non-OK response from the current attempt
  * @param baseBackoffMs - Base backoff passed to {@link fullJitter} when falling back
  * @param attempt - 1-based attempt index
+ * @param maxBackoffMs - Optional ceiling applied only to the jitter fallback
  * @param nowMs - Current time in milliseconds (injectable for tests)
  * @returns Wait duration in milliseconds before the next attempt
  */
@@ -398,16 +441,17 @@ const resolveRetryDelayMs = (
   response: Response,
   baseBackoffMs: number,
   attempt: number,
+  maxBackoffMs?: number,
   nowMs: number = Date.now(),
 ): number => {
   const header = response.headers?.get('Retry-After');
   if (header == null) {
-    return fullJitter(baseBackoffMs, attempt);
+    return fullJitter(baseBackoffMs, attempt, maxBackoffMs);
   }
 
   const fromHeader = parseRetryAfterMs(header, nowMs);
   if (fromHeader === undefined) {
-    return fullJitter(baseBackoffMs, attempt);
+    return fullJitter(baseBackoffMs, attempt, maxBackoffMs);
   }
 
   return fromHeader;
