@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/fetch-retrier?style=flat-square)](https://www.npmjs.com/package/fetch-retrier)
 [![license](https://img.shields.io/npm/l/fetch-retrier?style=flat-square)](https://www.npmjs.com/package/fetch-retrier)
 [![Node.js](https://img.shields.io/node/v/fetch-retrier?style=flat-square)](https://www.npmjs.com/package/fetch-retrier)
-[![build](https://img.shields.io/github/actions/workflow/status/gammarers-labs/fetch-retrier/build.yml?branch=main&label=build&style=flat-square)](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/build.yml)
+[![build](https://img.shields.io/github/actions/workflow/status/gammarers-labs/fetch-retrier/build.yml?label=build&style=flat-square)](https://github.com/gammarers-labs/fetch-retrier/actions/workflows/build.yml)
 
 A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeout**, **Retry-After** support, **full jitter** backoff, and **option validation**. Pass standard `RequestInit` options (`method`, `body`, `credentials`, and more) for POST/PUT APIs and other HTTP calls that may be rate-limited or temporarily unavailable.
 
@@ -19,7 +19,7 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 - **Default retry policy** – Retries transient HTTP statuses (408, 425, 429, 500, 502, 503, 504) via `defaultShouldRetry` and `DEFAULT_RETRYABLE_HTTP_STATUSES`.
 - **Extensible retry predicate** – Compose `defaultShouldRetry` with custom `shouldRetry` logic (receives response body text).
 - **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests and backoff waits.
-- **Typed errors** – All failures extend `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, and `FetchRetrierInvalidOptionsError`.
+- **Typed errors** – All failures extend abstract `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierAlreadyAbortedError`, and `FetchRetrierInvalidOptionsError`.
 - **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
 
 ## How it works
@@ -27,7 +27,7 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 Options are validated, then each attempt sends the same URL and `init`/`headers` with an internal timeout. If `response.ok` is true, that response is returned. Otherwise `shouldRetry` decides whether to wait and try again. HTTP retries prefer a valid `Retry-After` header; abort and network retries use full jitter. After the last attempt, a subclass of `FetchRetrierError` is thrown.
 
 - **Success** – If `response.ok` is true, the response is returned immediately.
-- **Package errors** – Failures from this package extend `FetchRetrierError`. Catch the base, or a subclass for a specific case.
+- **Package errors** – Failures from this package extend abstract `FetchRetrierError`. Catch the base, or a subclass for a specific case. Construct a subclass.
 - **Invalid options** – If `retries < 1`, `timeoutMs <= 0`, `baseBackoffMs < 0`, or `maxBackoffMs` is set and `< 0`, `FetchRetrierInvalidOptionsError` is thrown before any request is made. This is not a `TypeError`.
 - **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits and retries until `retries` is exhausted. Wait prefers a valid `Retry-After` header (delta-seconds or HTTP-date); otherwise uses full jitter. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status` and `body`).
 - **Non-retriable failure** – If `shouldRetry` returns false, `FetchRetrierHttpError` is thrown immediately with `status` and `body` (e.g. `Non-retriable HTTP error: 404`).
@@ -127,9 +127,9 @@ const response = await fetchRetrier('https://api.example.com/data', {
 
 ### Handling errors
 
-All failures thrown by `fetchRetrier` extend `FetchRetrierError`. Catch the base for any library
-failure, or a subclass for a specific case. `FetchRetrierInvalidOptionsError` does not extend
-`TypeError`.
+All failures thrown by `fetchRetrier` extend `FetchRetrierError`. The base class is abstract.
+Catch it for any library failure, or a subclass for a specific case. Construct a subclass.
+`FetchRetrierInvalidOptionsError` does not extend `TypeError`.
 
 On a non-OK response that is not retried (or after retries are exhausted), `FetchRetrierHttpError`
 includes both `status` and the already-read `body`:
@@ -222,7 +222,7 @@ try {
 ## Requirements
 
 - **Node.js** >= 20.0.0
-- Uses the global `fetch` (available in Node 18+)
+- Uses the global `fetch`
 
 ## License
 
