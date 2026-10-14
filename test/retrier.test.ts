@@ -722,7 +722,6 @@ describe('parseRetryAfterMs', () => {
 
 describe('FetchRetrierError', () => {
   it.each([
-    ['FetchRetrierError', new FetchRetrierError('base')],
     ['FetchRetrierAbortError', new FetchRetrierAbortError()],
     ['FetchRetrierAlreadyAbortedError', new FetchRetrierAlreadyAbortedError()],
     ['FetchRetrierHttpError', new FetchRetrierHttpError('HTTP 500', 500, '')],

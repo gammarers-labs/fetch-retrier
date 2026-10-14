@@ -1,18 +1,20 @@
-import { fullJitter } from './backoff/jitter';
-import { resolveRetryDelayMs } from './backoff/retry-after';
+import { fullJitter } from './core/backoff/jitter';
+import { resolveRetryDelayMs } from './core/backoff/retry-after';
 import {
   FetchRetrierAbortError,
   FetchRetrierAlreadyAbortedError,
   FetchRetrierHttpError,
   FetchRetrierNetworkError,
   FetchRetrierUnreachableError,
-} from './errors';
-import { timedFetch } from './http/timed-fetch';
-import { RequestOptions } from './options';
-import { defaultShouldRetry } from './policy/default-should-retry';
-import { validateRequestOptions } from './policy/validate-options';
-import { isLastAttempt } from './retry-predicates';
-import { wait } from './time/wait';
+} from './core/errors';
+import { timedFetch } from './core/http/timed-fetch';
+import { RequestOptions } from './core/options';
+import { defaultShouldRetry } from './core/policy/default-should-retry';
+import { validateRequestOptions } from './core/policy/validate-options';
+import { isLastAttempt } from './core/retry-predicates';
+import { wait } from './core/time/wait';
+
+export type { FetchInitOptions, RequestOptions } from './core/options';
 
 /**
  * Wraps `fetch` with retries, per-attempt timeout, Retry-After support, full-jitter backoff, and

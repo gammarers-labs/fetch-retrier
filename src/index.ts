@@ -14,10 +14,10 @@ export {
   FetchRetrierNetworkError,
   FetchRetrierUnreachableError,
 } from './core/errors';
-export type { FetchInitOptions, RequestOptions } from './core/options';
-export { parseRetryAfterMs } from './core/backoff/retry-after';
-export { fetchRetrier } from './core/fetch-retrier';
 export {
   DEFAULT_RETRYABLE_HTTP_STATUSES,
   defaultShouldRetry,
-} from './core/policy/default-should-retry';
+} from './default-should-retry';
+export { fetchRetrier } from './fetch-retrier';
+export type { FetchInitOptions, RequestOptions } from './fetch-retrier';
+export { parseRetryAfterMs } from './parse-retry-after';
