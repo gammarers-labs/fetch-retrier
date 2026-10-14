@@ -40,7 +40,8 @@ export class FetchRetrierAbortError extends FetchRetrierError {
 }
 
 /**
- * Error thrown when {@link RequestOptions.signal} is already aborted before an attempt starts.
+ * Error thrown when {@link RequestOptions.signal} is already aborted before an attempt starts,
+ * including when a full-jitter or `Retry-After` wait ends early because the signal aborted.
  */
 export class FetchRetrierAlreadyAbortedError extends FetchRetrierAbortError {
   override readonly name: string = 'FetchRetrierAlreadyAbortedError';

@@ -58,9 +58,11 @@ export interface RequestOptions {
   /**
    * Optional external {@link AbortSignal}. When aborted during an attempt, the in-flight request
    * is aborted. On the last attempt this surfaces as {@link FetchRetrierAbortError}. If retries
-   * remain, the next attempt sees the still-aborted signal and throws
-   * {@link FetchRetrierAlreadyAbortedError}. Distinct from per-attempt timeout, which retries
-   * remaining attempts and only then throws {@link FetchRetrierAbortError}.
+   * remain, backoff is skipped and the next attempt throws
+   * {@link FetchRetrierAlreadyAbortedError}. Aborting during a full-jitter or `Retry-After` wait
+   * ends that wait immediately and throws {@link FetchRetrierAlreadyAbortedError}. Distinct from
+   * per-attempt timeout, which retries remaining attempts and only then throws
+   * {@link FetchRetrierAbortError}.
    */
   signal?: AbortSignal;
   /**
