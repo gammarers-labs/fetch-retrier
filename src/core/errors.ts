@@ -8,16 +8,16 @@
 /**
  * Base class for every error thrown by this package.
  *
- * Catch {@link FetchRetrierError} to handle any library failure, or a subclass for a specific
- * case. Distinct from native `fetch` `TypeError` and `AbortError` values, which are wrapped
- * before they leave {@link fetchRetrier}.
+ * This class is abstract. Catch it to handle any library failure, or a subclass for a specific
+ * case. Callers construct a subclass. Distinct from native `fetch` `TypeError` and `AbortError`
+ * values, which are wrapped before they leave {@link fetchRetrier}.
  */
-export class FetchRetrierError extends Error {
+export abstract class FetchRetrierError extends Error {
   override readonly name: string = 'FetchRetrierError';
   /**
    * @param message - Human-readable reason
    */
-  constructor(message: string) {
+  protected constructor(message: string) {
     super(message);
     Object.setPrototypeOf(this, FetchRetrierError.prototype);
   }
@@ -40,7 +40,8 @@ export class FetchRetrierAbortError extends FetchRetrierError {
 }
 
 /**
- * Error thrown when {@link RequestOptions.signal} is already aborted before an attempt starts.
+ * Error thrown when {@link RequestOptions.signal} is already aborted before an attempt starts,
+ * including when a full-jitter or `Retry-After` wait ends early because the signal aborted.
  */
 export class FetchRetrierAlreadyAbortedError extends FetchRetrierAbortError {
   override readonly name: string = 'FetchRetrierAlreadyAbortedError';

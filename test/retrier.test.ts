@@ -306,6 +306,72 @@ describe('fetchRetrier', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('should skip backoff when aborted in flight with retries remaining', async () => {
+    jest.useFakeTimers();
+    globalThis.fetch = jest.fn(hangingFetchUntilAbort);
+    const controller = new AbortController();
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      retries: 2,
+      baseBackoffMs: 60000,
+      signal: controller.signal,
+    });
+    const attemptSignal = lastFetchSignal();
+
+    controller.abort();
+
+    await expect(promise).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
+    expect(attemptSignal?.aborted).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should end a Retry-After wait when the signal aborts', async () => {
+    jest.useFakeTimers();
+    const controller = new AbortController();
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({ 'Retry-After': '3' }),
+    } as unknown as Response;
+    globalThis.fetch = jest.fn().mockResolvedValue(retryRes);
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      retries: 2,
+      signal: controller.signal,
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+
+    await expect(promise).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should end a full jitter wait after a network error when the signal aborts', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const controller = new AbortController();
+    globalThis.fetch = jest.fn().mockRejectedValue(new TypeError('network'));
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      retries: 2,
+      baseBackoffMs: 1000,
+      signal: controller.signal,
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+
+    await expect(promise).rejects.toBeInstanceOf(FetchRetrierAlreadyAbortedError);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('should pass init options (method, body, credentials) to fetch', async () => {
     const mockRes = { ok: true, status: 200, text: () => Promise.resolve('') } as unknown as Response;
     globalThis.fetch = jest.fn().mockResolvedValue(mockRes);
@@ -656,7 +722,6 @@ describe('parseRetryAfterMs', () => {
 
 describe('FetchRetrierError', () => {
   it.each([
-    ['FetchRetrierError', new FetchRetrierError('base')],
     ['FetchRetrierAbortError', new FetchRetrierAbortError()],
     ['FetchRetrierAlreadyAbortedError', new FetchRetrierAlreadyAbortedError()],
     ['FetchRetrierHttpError', new FetchRetrierHttpError('HTTP 500', 500, '')],

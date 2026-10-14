@@ -27,6 +27,8 @@ export interface TimedFetchOptions {
 /**
  * Calls `fetch` with an internal {@link AbortSignal} for `timeoutMs`.
  *
+ * When `options.signal` aborts, that internal signal aborts as well.
+ *
  * @param url - Request URL passed to `fetch`
  * @param options - Timeout, init, headers, and optional external signal
  * @returns The {@link Response} from this single attempt
