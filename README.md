@@ -18,7 +18,7 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 - **Header shorthand** – Optional top-level `headers` override `init.headers` when both are set.
 - **Default retry policy** – Retries transient HTTP statuses (408, 425, 429, 500, 502, 503, 504) via `defaultShouldRetry` and `DEFAULT_RETRYABLE_HTTP_STATUSES`.
 - **Extensible retry predicate** – Compose `defaultShouldRetry` with custom `shouldRetry` logic (receives response body text).
-- **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests.
+- **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests and backoff waits.
 - **Typed errors** – All failures extend `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, and `FetchRetrierInvalidOptionsError`.
 - **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
 
@@ -32,7 +32,8 @@ Options are validated, then each attempt sends the same URL and `init`/`headers`
 - **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits and retries until `retries` is exhausted. Wait prefers a valid `Retry-After` header (delta-seconds or HTTP-date); otherwise uses full jitter. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status` and `body`).
 - **Non-retriable failure** – If `shouldRetry` returns false, `FetchRetrierHttpError` is thrown immediately with `status` and `body` (e.g. `Non-retriable HTTP error: 404`).
 - **Timeout** – If a request exceeds `timeoutMs`, that attempt is aborted and retried with full jitter until `retries` is exhausted. Timeout is per-attempt and does not cancel later attempts. The final failure is `FetchRetrierAbortError`.
-- **External abort (in-flight)** – If `signal` is aborted during an attempt, the in-flight request is aborted. On the last attempt, the failure is `FetchRetrierAbortError`. If retries remain, the next attempt sees the still-aborted signal and throws `FetchRetrierAlreadyAbortedError` (no further request is made).
+- **External abort (in-flight)** – If `signal` is aborted during an attempt, the in-flight request is aborted. On the last attempt, the failure is `FetchRetrierAbortError`. If retries remain, backoff is skipped and the next attempt sees the still-aborted signal and throws `FetchRetrierAlreadyAbortedError` (no further request is made).
+- **Abort during backoff** – If `signal` aborts while waiting on full jitter or `Retry-After`, the wait ends immediately and `FetchRetrierAlreadyAbortedError` is thrown (no further request is made).
 - **Network / TypeError** – Network errors are retried with full jitter; after the last attempt, `FetchRetrierNetworkError` is thrown with the original error as `cause`.
 - **Already aborted signal** – If `signal` is already aborted before an attempt starts, `FetchRetrierAlreadyAbortedError` is thrown (no attempt is made).
 
@@ -162,7 +163,8 @@ try {
 Timeout abort and external abort are different. Per-attempt timeout retries remaining attempts and
 then throws `FetchRetrierAbortError`. An in-flight external abort cancels the current request;
 the last attempt throws `FetchRetrierAbortError`, while remaining attempts throw
-`FetchRetrierAlreadyAbortedError` because the signal stays aborted.
+`FetchRetrierAlreadyAbortedError` because the signal stays aborted. Aborting during a full-jitter
+or `Retry-After` wait also ends the wait immediately and throws `FetchRetrierAlreadyAbortedError`.
 
 `FetchRetrierAlreadyAbortedError` extends `FetchRetrierAbortError`, so check the subclass first.
 
@@ -206,7 +208,7 @@ try {
 | `maxBackoffMs` | `number` | No | Optional ceiling in milliseconds applied to the full-jitter result (`Math.min(jitter, maxBackoffMs)`). Does not clip a valid `Retry-After`. Must be `>= 0` when set (`0` skips jitter wait). Omitted means no extra clip. |
 | `init` | `FetchInitOptions` | No | `fetch` options forwarded to every attempt: `method`, `body`, `credentials`, `redirect`, `mode`, `cache`, etc. `signal` is reserved for internal timeout and cancellation. |
 | `headers` | `Record<string, string>` | No | Headers sent on every attempt. Overrides `init.headers` when both are set. |
-| `signal` | `AbortSignal` | No | External abort signal. If already aborted before an attempt, `FetchRetrierAlreadyAbortedError` is thrown. If aborted during an attempt, the in-flight request is aborted: the last attempt fails with `FetchRetrierAbortError`; remaining attempts fail with `FetchRetrierAlreadyAbortedError`. Distinct from `timeoutMs`, which retries remaining attempts and then throws `FetchRetrierAbortError`. |
+| `signal` | `AbortSignal` | No | External abort signal. If already aborted before an attempt, `FetchRetrierAlreadyAbortedError` is thrown. If aborted during an attempt, the in-flight request is aborted: the last attempt fails with `FetchRetrierAbortError`; remaining attempts fail with `FetchRetrierAlreadyAbortedError` without waiting out backoff. If aborted during a full-jitter or `Retry-After` wait, the wait ends immediately and `FetchRetrierAlreadyAbortedError` is thrown. Distinct from `timeoutMs`, which retries remaining attempts and then throws `FetchRetrierAbortError`. |
 | `shouldRetry` | `(response: Response, body: string) => boolean` | No | Called after `response.text()` when `response.ok` is false. Return `true` to retry. Default: `defaultShouldRetry` (statuses in `DEFAULT_RETRYABLE_HTTP_STATUSES`: 408, 425, 429, 500, 502, 503, 504). |
 
 ### Exported helpers
