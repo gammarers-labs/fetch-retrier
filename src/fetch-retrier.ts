@@ -25,8 +25,9 @@ export type { FetchInitOptions, RequestOptions } from './core/options';
  * valid `Retry-After` header (delta-seconds or HTTP-date) is preferred over full jitter; abort
  * and network retries always use full jitter. Those waits end immediately when
  * {@link RequestOptions.signal} aborts. Optional {@link RequestOptions.maxBackoffMs} clips the
- * jitter result, not a valid `Retry-After`. The same {@link FetchInitOptions} (including `body`)
- * is reused on every attempt.
+ * jitter result, not a valid `Retry-After`. Optional {@link RequestOptions.maxRetryAfterMs} clips
+ * a finite `Retry-After` delay and does not change jitter. The same {@link FetchInitOptions}
+ * (including `body`) is reused on every attempt.
  *
  * @param url - Request URL passed to `fetch`
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
@@ -34,7 +35,7 @@ export type { FetchInitOptions, RequestOptions } from './core/options';
  * @throws {FetchRetrierError} All failures from this function are subclasses of this class
  * @throws {FetchRetrierInvalidOptionsError} If `retries` is not a finite integer `>= 1`, `timeoutMs`
  *   is not a finite integer `> 0`, `baseBackoffMs` is not a finite integer `>= 0`, or `maxBackoffMs`
- *   is set and is not a finite integer `>= 0`
+ *   or `maxRetryAfterMs` is set and is not a finite integer `>= 0`
  * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt,
  *   including after an in-flight external abort while retries remain, or when it aborts during
  *   backoff before the next attempt
@@ -53,11 +54,12 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
     timeoutMs,
     baseBackoffMs,
     maxBackoffMs,
+    maxRetryAfterMs,
     signal: externalSignal,
     shouldRetry = defaultShouldRetry,
   } = options;
 
-  validateRequestOptions({ retries, timeoutMs, baseBackoffMs, maxBackoffMs });
+  validateRequestOptions({ retries, timeoutMs, baseBackoffMs, maxBackoffMs, maxRetryAfterMs });
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     if (externalSignal?.aborted) {
@@ -87,7 +89,10 @@ export const fetchRetrier = async (url: string, options: RequestOptions): Promis
         throw new FetchRetrierHttpError(`HTTP ${res.status}`, res.status, text);
       }
 
-      await wait(resolveRetryDelayMs(res, baseBackoffMs, attempt, maxBackoffMs), externalSignal);
+      await wait(
+        resolveRetryDelayMs(res, baseBackoffMs, attempt, maxBackoffMs, maxRetryAfterMs),
+        externalSignal,
+      );
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
         if (isLastAttempt(attempt, retries)) {

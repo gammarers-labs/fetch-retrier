@@ -56,6 +56,13 @@ export interface RequestOptions {
    */
   maxBackoffMs?: number;
   /**
+   * Optional ceiling in milliseconds applied to a finite `Retry-After` delay.
+   * When set, `Math.min(delay, maxRetryAfterMs)` is used. Does not change full jitter.
+   * Must be a finite integer `>= 0` when provided (`0` skips the `Retry-After` wait).
+   * Omitted means a finite `Retry-After` delay is not clipped.
+   */
+  maxRetryAfterMs?: number;
+  /**
    * Optional external {@link AbortSignal}. When aborted during an attempt, the in-flight request
    * is aborted. On the last attempt this surfaces as {@link FetchRetrierAbortError}. If retries
    * remain, backoff is skipped and the next attempt throws

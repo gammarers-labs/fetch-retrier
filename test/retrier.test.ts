@@ -442,6 +442,10 @@ describe('fetchRetrier', () => {
     ['maxBackoffMs (NaN)', { maxBackoffMs: Number.NaN }, 'maxBackoffMs must be an integer >= 0'],
     ['maxBackoffMs (Infinity)', { maxBackoffMs: Number.POSITIVE_INFINITY }, 'maxBackoffMs must be an integer >= 0'],
     ['maxBackoffMs (decimal)', { maxBackoffMs: 1.5 }, 'maxBackoffMs must be an integer >= 0'],
+    ['maxRetryAfterMs (negative)', { maxRetryAfterMs: -1 }, 'maxRetryAfterMs must be an integer >= 0'],
+    ['maxRetryAfterMs (NaN)', { maxRetryAfterMs: Number.NaN }, 'maxRetryAfterMs must be an integer >= 0'],
+    ['maxRetryAfterMs (Infinity)', { maxRetryAfterMs: Number.POSITIVE_INFINITY }, 'maxRetryAfterMs must be an integer >= 0'],
+    ['maxRetryAfterMs (decimal)', { maxRetryAfterMs: 1.5 }, 'maxRetryAfterMs must be an integer >= 0'],
   ])('should throw FetchRetrierInvalidOptionsError for invalid %s', async (_label, overrides, message) => {
     globalThis.fetch = jest.fn();
 
@@ -708,6 +712,210 @@ describe('fetchRetrier', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     jest.useRealTimers();
   });
+
+  it('should clip Retry-After delta-seconds to maxRetryAfterMs', async () => {
+    jest.useFakeTimers();
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({ 'Retry-After': '8640000' }),
+    } as unknown as Response;
+    const successRes = {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      maxRetryAfterMs: 40,
+    });
+    await jest.advanceTimersByTimeAsync(39);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    const res = await promise;
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    jest.useRealTimers();
+  });
+
+  it('should clip a far Retry-After HTTP-date to maxRetryAfterMs', async () => {
+    jest.useFakeTimers();
+    const now = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+    jest.setSystemTime(now);
+    const retryRes = {
+      ok: false,
+      status: 503,
+      text: () => Promise.resolve('unavailable'),
+      headers: headersWith({ 'Retry-After': 'Fri, 31 Dec 9999 23:59:59 GMT' }),
+    } as unknown as Response;
+    const successRes = {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      maxRetryAfterMs: 40,
+    });
+    await jest.advanceTimersByTimeAsync(39);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    const res = await promise;
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    jest.useRealTimers();
+  });
+
+  it('should not clip Retry-After delay below maxRetryAfterMs', async () => {
+    jest.useFakeTimers();
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({ 'Retry-After': '3' }),
+    } as unknown as Response;
+    const successRes = {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      maxRetryAfterMs: 5000,
+    });
+    await jest.advanceTimersByTimeAsync(2999);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    const res = await promise;
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    jest.useRealTimers();
+  });
+
+  it('should skip Retry-After wait when maxRetryAfterMs is 0', async () => {
+    jest.useFakeTimers();
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({ 'Retry-After': '3' }),
+    } as unknown as Response;
+    const successRes = {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      maxRetryAfterMs: 0,
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    const res = await promise;
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    jest.useRealTimers();
+  });
+
+  it('should not clip full jitter delay with maxRetryAfterMs', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({}),
+    } as unknown as Response;
+    const successRes = {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    // fullJitter(100, 1) with Math.random() === 0.5 → 100, maxRetryAfterMs 40 leaves 100
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      baseBackoffMs: 100,
+      maxRetryAfterMs: 40,
+    });
+    await jest.advanceTimersByTimeAsync(99);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    const res = await promise;
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    jest.useRealTimers();
+  });
+
+  it('should fall back to full jitter when Retry-After delta-seconds overflows', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({ 'Retry-After': `1${'0'.repeat(309)}` }),
+    } as unknown as Response;
+    const successRes = {
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(''),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(retryRes)
+      .mockResolvedValueOnce(successRes);
+
+    // fullJitter(100, 1) with Math.random() === 0.5 → floor(0.5 * 200) = 100
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      baseBackoffMs: 100,
+      maxRetryAfterMs: 40,
+    });
+    await jest.advanceTimersByTimeAsync(99);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    const res = await promise;
+
+    expect(res).toBe(successRes);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    jest.useRealTimers();
+  });
 });
 
 describe('parseRetryAfterMs', () => {
@@ -727,6 +935,7 @@ describe('parseRetryAfterMs', () => {
     ['non-integer delta', '1.5'],
     ['negative delta', '-1'],
     ['invalid date', 'not-a-date'],
+    ['overflowing delta-seconds', `1${'0'.repeat(309)}`],
   ])('should return undefined for %s', (_label, value) => {
     expect(parseRetryAfterMs(value, 0)).toBeUndefined();
   });
