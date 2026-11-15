@@ -20,7 +20,7 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 - **Extensible retry predicate** – Compose `defaultShouldRetry` with custom `shouldRetry` logic (receives response body text).
 - **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests and backoff waits.
 - **Typed errors** – Errors created by this package extend abstract `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierAlreadyAbortedError`, and `FetchRetrierInvalidOptionsError`. Any other exception is rethrown as-is.
-- **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
+- **TypeScript** – Exported types including `RequestOptions`, `FetchInitOptions`, and `ParseRetryAfterOptions`.
 
 ## How it works
 
@@ -219,8 +219,10 @@ try {
 |--------|-------------|
 | `defaultShouldRetry` | Default `shouldRetry` predicate; compose with custom logic. |
 | `DEFAULT_RETRYABLE_HTTP_STATUSES` | Readonly list of HTTP status codes retried by default. |
-| `parseRetryAfterMs` | Parses a `Retry-After` header (delta-seconds or HTTP-date) into a delay in milliseconds. Pass `ParseRetryAfterOptions` (`{ nowMs }`) to inject the current time. A numeric second argument is still accepted. Overflowing delta-seconds are unparsable. |
+| `parseRetryAfterMs` | Parses a `Retry-After` header (delta-seconds or HTTP-date) into a delay in milliseconds. Pass `ParseRetryAfterOptions` (`{ nowMs }`) to inject the current time. Overflowing delta-seconds are unparsable. |
 | `ParseRetryAfterOptions` | Options for `parseRetryAfterMs`. `nowMs` is the current time in milliseconds and defaults to `Date.now()` when omitted. |
+
+`parseRetryAfterMs(value, nowMs)` still works.
 
 ## Requirements
 
