@@ -1,6 +1,32 @@
 import { fullJitter } from './jitter';
 
 /**
+ * Options for {@link parseRetryAfterMs}.
+ *
+ * Pass this object as the second argument. A numeric second argument is still accepted.
+ */
+export interface ParseRetryAfterOptions {
+  /**
+   * Current time in milliseconds.
+   * When omitted, {@link parseRetryAfterMs} uses `Date.now()`.
+   */
+  nowMs?: number;
+}
+
+/**
+ * Resolves the clock for {@link parseRetryAfterMs}.
+ *
+ * A number is the positional current time. An options object reads `nowMs`.
+ * Either form falls back to `Date.now()` when the clock is omitted.
+ */
+const currentTimeMs = (nowMsOrOptions?: number | ParseRetryAfterOptions): number => {
+  if (typeof nowMsOrOptions === 'number') {
+    return nowMsOrOptions;
+  }
+  return nowMsOrOptions?.nowMs ?? Date.now();
+};
+
+/**
  * Parses a `Retry-After` header value into a delay in milliseconds.
  *
  * Supports RFC 7231 forms: non-negative integer delta-seconds, or an HTTP-date. Empty values,
@@ -8,11 +34,17 @@ import { fullJitter } from './jitter';
  * overflow to a non-finite delay yield `undefined` so callers can fall back to full jitter.
  * An HTTP-date in the past yields `0`.
  *
+ * Prefer `{ nowMs }` from {@link ParseRetryAfterOptions}. A numeric second argument is still accepted.
+ *
  * @param value - Raw `Retry-After` header value
- * @param nowMs - Current time in milliseconds (injectable for tests)
+ * @param nowMsOrOptions - `{ nowMs }` (preferred) or a current time in milliseconds. Defaults to `Date.now()`
  * @returns Delay in milliseconds, or `undefined` when the value cannot be parsed
  */
-export const parseRetryAfterMs = (value: string, nowMs: number = Date.now()): number | undefined => {
+export const parseRetryAfterMs = (
+  value: string,
+  nowMsOrOptions?: number | ParseRetryAfterOptions,
+): number | undefined => {
+  const nowMs = currentTimeMs(nowMsOrOptions);
   const trimmed = value.trim();
   if (trimmed === '') {
     return undefined;
@@ -70,7 +102,7 @@ export const resolveRetryDelayMs = (
     return fullJitter(baseBackoffMs, attempt, maxBackoffMs);
   }
 
-  const fromHeader = parseRetryAfterMs(header, nowMs);
+  const fromHeader = parseRetryAfterMs(header, { nowMs });
   if (fromHeader === undefined) {
     return fullJitter(baseBackoffMs, attempt, maxBackoffMs);
   }

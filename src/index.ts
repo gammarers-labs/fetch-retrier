@@ -21,3 +21,4 @@ export {
 export { fetchRetrier } from './fetch-retrier';
 export type { FetchInitOptions, RequestOptions } from './fetch-retrier';
 export { parseRetryAfterMs } from './parse-retry-after';
+export type { ParseRetryAfterOptions } from './parse-retry-after';

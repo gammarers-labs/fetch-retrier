@@ -926,7 +926,21 @@ describe('parseRetryAfterMs', () => {
     ['HTTP-date in the future', 'Wed, 21 Oct 2015 07:28:05 GMT', Date.parse('Wed, 21 Oct 2015 07:28:00 GMT'), 5000],
     ['HTTP-date in the past', 'Wed, 21 Oct 2015 07:27:00 GMT', Date.parse('Wed, 21 Oct 2015 07:28:00 GMT'), 0],
   ])('should parse %s', (_label, value, nowMs, expected) => {
-    expect(parseRetryAfterMs(value, nowMs)).toBe(expected);
+    expect(parseRetryAfterMs(value, { nowMs })).toBe(expected);
+  });
+
+  it('should accept a positional nowMs', () => {
+    expect(parseRetryAfterMs('5', 1_000_000)).toBe(5000);
+  });
+
+  it('should default nowMs when the clock is omitted', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(Date.parse('Wed, 21 Oct 2015 07:28:00 GMT'));
+
+    expect(parseRetryAfterMs('Wed, 21 Oct 2015 07:28:05 GMT')).toBe(5000);
+    expect(parseRetryAfterMs('Wed, 21 Oct 2015 07:28:05 GMT', {})).toBe(5000);
+
+    jest.useRealTimers();
   });
 
   it.each([
@@ -937,7 +951,7 @@ describe('parseRetryAfterMs', () => {
     ['invalid date', 'not-a-date'],
     ['overflowing delta-seconds', `1${'0'.repeat(309)}`],
   ])('should return undefined for %s', (_label, value) => {
-    expect(parseRetryAfterMs(value, 0)).toBeUndefined();
+    expect(parseRetryAfterMs(value, { nowMs: 0 })).toBeUndefined();
   });
 });
 

@@ -219,7 +219,8 @@ try {
 |--------|-------------|
 | `defaultShouldRetry` | Default `shouldRetry` predicate; compose with custom logic. |
 | `DEFAULT_RETRYABLE_HTTP_STATUSES` | Readonly list of HTTP status codes retried by default. |
-| `parseRetryAfterMs` | Parses a `Retry-After` header (delta-seconds or HTTP-date) into a delay in milliseconds. Overflowing delta-seconds are unparsable. |
+| `parseRetryAfterMs` | Parses a `Retry-After` header (delta-seconds or HTTP-date) into a delay in milliseconds. Pass `ParseRetryAfterOptions` (`{ nowMs }`) to inject the current time. A numeric second argument is still accepted. Overflowing delta-seconds are unparsable. |
+| `ParseRetryAfterOptions` | Options for `parseRetryAfterMs`. `nowMs` is the current time in milliseconds and defaults to `Date.now()` when omitted. |
 
 ## Requirements
 
