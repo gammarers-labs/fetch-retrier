@@ -32,7 +32,8 @@ export type { FetchInitOptions, RequestOptions } from './core/options';
  * @param url - Request URL passed to `fetch`
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
  * @returns The first {@link Response} for which `ok` is `true`
- * @throws {FetchRetrierError} All failures from this function are subclasses of this class
+ * @throws {FetchRetrierError} Failures created by this function are subclasses of this class.
+ *   An exception that is neither an `AbortError` nor a network `TypeError` is rethrown as-is
  * @throws {FetchRetrierInvalidOptionsError} If `retries` is not a finite integer `>= 1`, `timeoutMs`
  *   is not a finite integer `> 0`, `baseBackoffMs` is not a finite integer `>= 0`, or `maxBackoffMs`
  *   or `maxRetryAfterMs` is set and is not a finite integer `>= 0`

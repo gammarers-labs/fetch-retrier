@@ -19,12 +19,12 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 - **Default retry policy** – Retries transient HTTP statuses (408, 425, 429, 500, 502, 503, 504) via `defaultShouldRetry` and `DEFAULT_RETRYABLE_HTTP_STATUSES`.
 - **Extensible retry predicate** – Compose `defaultShouldRetry` with custom `shouldRetry` logic (receives response body text).
 - **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests and backoff waits.
-- **Typed errors** – All failures extend abstract `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierAlreadyAbortedError`, and `FetchRetrierInvalidOptionsError`.
+- **Typed errors** – Errors created by this package extend abstract `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierAlreadyAbortedError`, and `FetchRetrierInvalidOptionsError`. Any other exception is rethrown as-is.
 - **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
 
 ## How it works
 
-Options are validated, then each attempt sends the same URL and `init`/`headers` with an internal timeout. If `response.ok` is true, that response is returned. Otherwise `shouldRetry` decides whether to wait and try again. HTTP retries prefer a valid `Retry-After` header; abort and network retries use full jitter. After the last attempt, a subclass of `FetchRetrierError` is thrown.
+Options are validated, then each attempt sends the same URL and `init`/`headers` with an internal timeout. If `response.ok` is true, that response is returned. Otherwise `shouldRetry` decides whether to wait and try again. HTTP retries prefer a valid `Retry-After` header; abort and network retries use full jitter. After the last attempt, a subclass of `FetchRetrierError` is thrown. An exception that is neither an abort nor a network `TypeError` is rethrown immediately.
 
 - **Success** – If `response.ok` is true, the response is returned immediately.
 - **Package errors** – Failures from this package extend abstract `FetchRetrierError`. Catch the base, or a subclass for a specific case. Construct a subclass.
@@ -127,8 +127,9 @@ const response = await fetchRetrier('https://api.example.com/data', {
 
 ### Handling errors
 
-All failures thrown by `fetchRetrier` extend `FetchRetrierError`. The base class is abstract.
+Errors created by `fetchRetrier` extend `FetchRetrierError`. The base class is abstract.
 Catch it for any library failure, or a subclass for a specific case. Construct a subclass.
+An exception that is neither an abort nor a network `TypeError` is rethrown as-is.
 `FetchRetrierInvalidOptionsError` does not extend `TypeError`.
 
 On a non-OK response that is not retried (or after retries are exhausted), `FetchRetrierHttpError`
