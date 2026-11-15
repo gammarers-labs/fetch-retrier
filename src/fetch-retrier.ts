@@ -32,8 +32,9 @@ export type { FetchInitOptions, RequestOptions } from './core/options';
  * @param options - {@link RequestOptions} controlling retries, timeout, request init, and cancellation
  * @returns The first {@link Response} for which `ok` is `true`
  * @throws {FetchRetrierError} All failures from this function are subclasses of this class
- * @throws {FetchRetrierInvalidOptionsError} If `retries < 1`, `timeoutMs <= 0`, `baseBackoffMs < 0`,
- *   or `maxBackoffMs` is set and `< 0`
+ * @throws {FetchRetrierInvalidOptionsError} If `retries` is not a finite integer `>= 1`, `timeoutMs`
+ *   is not a finite integer `> 0`, `baseBackoffMs` is not a finite integer `>= 0`, or `maxBackoffMs`
+ *   is set and is not a finite integer `>= 0`
  * @throws {FetchRetrierAlreadyAbortedError} If `options.signal` is already aborted before an attempt,
  *   including after an in-flight external abort while retries remain, or when it aborts during
  *   backoff before the next attempt

@@ -424,12 +424,24 @@ describe('fetchRetrier', () => {
   });
 
   it.each([
-    ['retries', { retries: 0 }, 'retries must be >= 1'],
-    ['retries (negative)', { retries: -1 }, 'retries must be >= 1'],
-    ['timeoutMs (zero)', { timeoutMs: 0 }, 'timeoutMs must be > 0'],
-    ['timeoutMs (negative)', { timeoutMs: -100 }, 'timeoutMs must be > 0'],
-    ['baseBackoffMs (negative)', { baseBackoffMs: -1 }, 'baseBackoffMs must be >= 0'],
-    ['maxBackoffMs (negative)', { maxBackoffMs: -1 }, 'maxBackoffMs must be >= 0'],
+    ['retries', { retries: 0 }, 'retries must be an integer >= 1'],
+    ['retries (negative)', { retries: -1 }, 'retries must be an integer >= 1'],
+    ['retries (NaN)', { retries: Number.NaN }, 'retries must be an integer >= 1'],
+    ['retries (Infinity)', { retries: Number.POSITIVE_INFINITY }, 'retries must be an integer >= 1'],
+    ['retries (decimal)', { retries: 1.5 }, 'retries must be an integer >= 1'],
+    ['timeoutMs (zero)', { timeoutMs: 0 }, 'timeoutMs must be an integer > 0'],
+    ['timeoutMs (negative)', { timeoutMs: -100 }, 'timeoutMs must be an integer > 0'],
+    ['timeoutMs (NaN)', { timeoutMs: Number.NaN }, 'timeoutMs must be an integer > 0'],
+    ['timeoutMs (Infinity)', { timeoutMs: Number.POSITIVE_INFINITY }, 'timeoutMs must be an integer > 0'],
+    ['timeoutMs (decimal)', { timeoutMs: 1.5 }, 'timeoutMs must be an integer > 0'],
+    ['baseBackoffMs (negative)', { baseBackoffMs: -1 }, 'baseBackoffMs must be an integer >= 0'],
+    ['baseBackoffMs (NaN)', { baseBackoffMs: Number.NaN }, 'baseBackoffMs must be an integer >= 0'],
+    ['baseBackoffMs (Infinity)', { baseBackoffMs: Number.POSITIVE_INFINITY }, 'baseBackoffMs must be an integer >= 0'],
+    ['baseBackoffMs (decimal)', { baseBackoffMs: 1.5 }, 'baseBackoffMs must be an integer >= 0'],
+    ['maxBackoffMs (negative)', { maxBackoffMs: -1 }, 'maxBackoffMs must be an integer >= 0'],
+    ['maxBackoffMs (NaN)', { maxBackoffMs: Number.NaN }, 'maxBackoffMs must be an integer >= 0'],
+    ['maxBackoffMs (Infinity)', { maxBackoffMs: Number.POSITIVE_INFINITY }, 'maxBackoffMs must be an integer >= 0'],
+    ['maxBackoffMs (decimal)', { maxBackoffMs: 1.5 }, 'maxBackoffMs must be an integer >= 0'],
   ])('should throw FetchRetrierInvalidOptionsError for invalid %s', async (_label, overrides, message) => {
     globalThis.fetch = jest.fn();
 
@@ -726,7 +738,7 @@ describe('FetchRetrierError', () => {
     ['FetchRetrierAlreadyAbortedError', new FetchRetrierAlreadyAbortedError()],
     ['FetchRetrierHttpError', new FetchRetrierHttpError('HTTP 500', 500, '')],
     ['FetchRetrierNetworkError', new FetchRetrierNetworkError()],
-    ['FetchRetrierInvalidOptionsError', new FetchRetrierInvalidOptionsError('retries must be >= 1')],
+    ['FetchRetrierInvalidOptionsError', new FetchRetrierInvalidOptionsError('retries must be an integer >= 1')],
     ['FetchRetrierUnreachableError', new FetchRetrierUnreachableError()],
   ])('%s is a FetchRetrierError', (_label, err) => {
     expect(err).toBeInstanceOf(FetchRetrierError);
@@ -738,6 +750,6 @@ describe('FetchRetrierError', () => {
   });
 
   it('InvalidOptionsError is not a TypeError', () => {
-    expect(new FetchRetrierInvalidOptionsError('retries must be >= 1')).not.toBeInstanceOf(TypeError);
+    expect(new FetchRetrierInvalidOptionsError('retries must be an integer >= 1')).not.toBeInstanceOf(TypeError);
   });
 });
