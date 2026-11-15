@@ -4,7 +4,7 @@ const project = new ProjenTypeScriptProject({
   repositoryUrl: 'https://github.com/gammarers-labs/fetch-retrier.git',
   description: 'Retry-enabled fetch wrapper with per-attempt timeout, Retry-After support, full-jitter backoff, and option validation.',
   devDeps: [
-    '@gammarers/projen-projects@^0.5.8',
+    '@gammarers/projen-projects@^0.8.0',
   ],
   releaseToNpm: true,
   npmTrustedPublishing: true,

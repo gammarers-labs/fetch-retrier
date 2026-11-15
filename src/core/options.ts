@@ -34,27 +34,34 @@ export interface RequestOptions {
   init?: FetchInitOptions;
   /**
    * Maximum number of attempts, including the first.
-   * Must be `>= 1`.
+   * Must be a finite integer `>= 1`.
    */
   retries: number;
   /**
    * Per-attempt timeout in milliseconds; uses an internal {@link AbortController} when exceeded.
-   * Must be `> 0`.
+   * Must be a finite integer `> 0`.
    */
   timeoutMs: number;
   /**
    * Base backoff in milliseconds for full jitter when `Retry-After` is absent or invalid.
    * The exponential span for attempt `n` is `baseBackoffMs * 2^n`, then the result is clipped
    * by {@link RequestOptions.maxBackoffMs} when that option is set.
-   * Must be `>= 0` (`0` skips backoff delay between attempts when falling back to jitter).
+   * Must be a finite integer `>= 0` (`0` skips backoff delay between attempts when falling back to jitter).
    */
   baseBackoffMs: number;
   /**
    * Optional ceiling in milliseconds applied to the full-jitter delay.
    * When set, `Math.min(jitter, maxBackoffMs)` is used. Does not clip a valid `Retry-After`.
-   * Must be `>= 0` when provided (`0` skips jitter wait). Omitted means no extra clip.
+   * Must be a finite integer `>= 0` when provided (`0` skips jitter wait). Omitted means no extra clip.
    */
   maxBackoffMs?: number;
+  /**
+   * Optional ceiling in milliseconds applied to a finite `Retry-After` delay.
+   * When set, `Math.min(delay, maxRetryAfterMs)` is used. Does not change full jitter.
+   * Must be a finite integer `>= 0` when provided (`0` skips the `Retry-After` wait).
+   * Omitted means a finite `Retry-After` delay is not clipped.
+   */
+  maxRetryAfterMs?: number;
   /**
    * Optional external {@link AbortSignal}. When aborted during an attempt, the in-flight request
    * is aborted. On the last attempt this surfaces as {@link FetchRetrierAbortError}. If retries

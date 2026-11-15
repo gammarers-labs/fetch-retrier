@@ -9,27 +9,27 @@ A lightweight wrapper around `fetch` that adds **retries**, **per-attempt timeou
 
 ## Features
 
-- **Configurable retries** – Set the maximum number of attempts per request (`retries >= 1`).
-- **Per-attempt timeout** – Abort each attempt when it exceeds a given duration (`timeoutMs > 0`).
-- **Retry-After support** – On HTTP retries, prefers a valid `Retry-After` header (delta-seconds or HTTP-date); falls back to full jitter when absent or invalid.
-- **Full jitter backoff** – Exponential backoff with random jitter (AWS-style) for abort/network retries and as the HTTP fallback (`baseBackoffMs >= 0`). Optional `maxBackoffMs` clips the jitter result (`>= 0`); it does not clip a valid `Retry-After`.
-- **Option validation** – Invalid numeric options throw `FetchRetrierInvalidOptionsError` at call time.
+- **Configurable retries** – Set the maximum number of attempts per request (`retries` is a finite integer `>= 1`).
+- **Per-attempt timeout** – Abort each attempt when it exceeds a given duration (`timeoutMs` is a finite integer `> 0`).
+- **Retry-After support** – On HTTP retries, prefers a valid `Retry-After` header (delta-seconds or HTTP-date); falls back to full jitter when absent, invalid, or non-finite. Optional `maxRetryAfterMs` clips a finite delay (a finite integer `>= 0` when set) and does not change jitter.
+- **Full jitter backoff** – Exponential backoff with random jitter (AWS-style) for abort/network retries and as the HTTP fallback (`baseBackoffMs` is a finite integer `>= 0`). Optional `maxBackoffMs` clips the jitter result (a finite integer `>= 0` when set); it does not clip a valid `Retry-After`.
+- **Option validation** – Non-finite or non-integer numeric options throw `FetchRetrierInvalidOptionsError` before any request.
 - **RequestInit forwarding** – Pass `method`, `body`, `credentials`, `redirect`, and other `fetch` options via `init` on every attempt.
 - **Header shorthand** – Optional top-level `headers` override `init.headers` when both are set.
 - **Default retry policy** – Retries transient HTTP statuses (408, 425, 429, 500, 502, 503, 504) via `defaultShouldRetry` and `DEFAULT_RETRYABLE_HTTP_STATUSES`.
 - **Extensible retry predicate** – Compose `defaultShouldRetry` with custom `shouldRetry` logic (receives response body text).
 - **External cancellation** – Pass an `AbortSignal` to cancel in-flight requests and backoff waits.
-- **Typed errors** – All failures extend abstract `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierAlreadyAbortedError`, and `FetchRetrierInvalidOptionsError`.
-- **TypeScript** – Exported types including `RequestOptions` and `FetchInitOptions`.
+- **Typed errors** – Errors created by this package extend abstract `FetchRetrierError`. Subclasses include `FetchRetrierHttpError` (with `status` and `body`), `FetchRetrierNetworkError`, `FetchRetrierAbortError`, `FetchRetrierAlreadyAbortedError`, and `FetchRetrierInvalidOptionsError`. Any other exception is rethrown as-is.
+- **TypeScript** – Exported types including `RequestOptions`, `FetchInitOptions`, and `ParseRetryAfterOptions`.
 
 ## How it works
 
-Options are validated, then each attempt sends the same URL and `init`/`headers` with an internal timeout. If `response.ok` is true, that response is returned. Otherwise `shouldRetry` decides whether to wait and try again. HTTP retries prefer a valid `Retry-After` header; abort and network retries use full jitter. After the last attempt, a subclass of `FetchRetrierError` is thrown.
+Options are validated, then each attempt sends the same URL and `init`/`headers` with an internal timeout. If `response.ok` is true, that response is returned. Otherwise `shouldRetry` decides whether to wait and try again. HTTP retries prefer a valid `Retry-After` header; abort and network retries use full jitter. After the last attempt, a subclass of `FetchRetrierError` is thrown. An exception that is neither an abort nor a network `TypeError` is rethrown immediately.
 
 - **Success** – If `response.ok` is true, the response is returned immediately.
 - **Package errors** – Failures from this package extend abstract `FetchRetrierError`. Catch the base, or a subclass for a specific case. Construct a subclass.
-- **Invalid options** – If `retries < 1`, `timeoutMs <= 0`, `baseBackoffMs < 0`, or `maxBackoffMs` is set and `< 0`, `FetchRetrierInvalidOptionsError` is thrown before any request is made. This is not a `TypeError`.
-- **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits and retries until `retries` is exhausted. Wait prefers a valid `Retry-After` header (delta-seconds or HTTP-date); otherwise uses full jitter. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status` and `body`).
+- **Invalid options** – If `retries`, `timeoutMs`, `baseBackoffMs`, or a set `maxBackoffMs` or `maxRetryAfterMs` is not a finite integer in range (`retries >= 1`, `timeoutMs > 0`, backoff and Retry-After ceilings `>= 0`), `FetchRetrierInvalidOptionsError` is thrown before any request is made. `NaN`, `Infinity`, and decimals are rejected. This is not a `TypeError`.
+- **Retriable failure** – If the response is not OK and `shouldRetry(response, body)` returns true, the client waits and retries until `retries` is exhausted. Wait prefers a valid `Retry-After` header (delta-seconds or HTTP-date); otherwise uses full jitter. When `maxRetryAfterMs` is set, a longer finite `Retry-After` is clipped to that ceiling. On the last attempt, `FetchRetrierHttpError` is thrown (includes `status` and `body`).
 - **Non-retriable failure** – If `shouldRetry` returns false, `FetchRetrierHttpError` is thrown immediately with `status` and `body` (e.g. `Non-retriable HTTP error: 404`).
 - **Timeout** – If a request exceeds `timeoutMs`, that attempt is aborted and retried with full jitter until `retries` is exhausted. Timeout is per-attempt and does not cancel later attempts. The final failure is `FetchRetrierAbortError`.
 - **External abort (in-flight)** – If `signal` is aborted during an attempt, the in-flight request is aborted. On the last attempt, the failure is `FetchRetrierAbortError`. If retries remain, backoff is skipped and the next attempt sees the still-aborted signal and throws `FetchRetrierAlreadyAbortedError` (no further request is made).
@@ -127,8 +127,9 @@ const response = await fetchRetrier('https://api.example.com/data', {
 
 ### Handling errors
 
-All failures thrown by `fetchRetrier` extend `FetchRetrierError`. The base class is abstract.
+Errors created by `fetchRetrier` extend `FetchRetrierError`. The base class is abstract.
 Catch it for any library failure, or a subclass for a specific case. Construct a subclass.
+An exception that is neither an abort nor a network `TypeError` is rethrown as-is.
 `FetchRetrierInvalidOptionsError` does not extend `TypeError`.
 
 On a non-OK response that is not retried (or after retries are exhausted), `FetchRetrierHttpError`
@@ -202,10 +203,11 @@ try {
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `retries` | `number` | Yes | Maximum number of attempts (including the first request). Must be `>= 1`. |
-| `timeoutMs` | `number` | Yes | Timeout in milliseconds for each attempt. Exceeded attempts are aborted and retried. Must be `> 0`. |
-| `baseBackoffMs` | `number` | Yes | Base delay in milliseconds for full jitter when `Retry-After` is absent or invalid (also used for abort/network retries). Exponential span is `baseBackoffMs * 2^attempt`, randomized. Must be `>= 0` (`0` skips backoff delay when falling back). |
-| `maxBackoffMs` | `number` | No | Optional ceiling in milliseconds applied to the full-jitter result (`Math.min(jitter, maxBackoffMs)`). Does not clip a valid `Retry-After`. Must be `>= 0` when set (`0` skips jitter wait). Omitted means no extra clip. |
+| `retries` | `number` | Yes | Maximum number of attempts (including the first request). Must be a finite integer `>= 1`. |
+| `timeoutMs` | `number` | Yes | Timeout in milliseconds for each attempt. Exceeded attempts are aborted and retried. Must be a finite integer `> 0`. |
+| `baseBackoffMs` | `number` | Yes | Base delay in milliseconds for full jitter when `Retry-After` is absent or invalid (also used for abort/network retries). Exponential span is `baseBackoffMs * 2^attempt`, randomized. Must be a finite integer `>= 0` (`0` skips backoff delay when falling back). |
+| `maxBackoffMs` | `number` | No | Optional ceiling in milliseconds applied to the full-jitter result (`Math.min(jitter, maxBackoffMs)`). Does not clip a valid `Retry-After`. Must be a finite integer `>= 0` when set (`0` skips jitter wait). Omitted means no extra clip. |
+| `maxRetryAfterMs` | `number` | No | Optional ceiling in milliseconds applied to a finite `Retry-After` delay (`Math.min(delay, maxRetryAfterMs)`). Does not change full jitter. A non-finite delta-seconds value still falls back to jitter. Must be a finite integer `>= 0` when set (`0` skips the `Retry-After` wait). Omitted means a finite `Retry-After` is not clipped. |
 | `init` | `FetchInitOptions` | No | `fetch` options forwarded to every attempt: `method`, `body`, `credentials`, `redirect`, `mode`, `cache`, etc. `signal` is reserved for internal timeout and cancellation. |
 | `headers` | `Record<string, string>` | No | Headers sent on every attempt. Overrides `init.headers` when both are set. |
 | `signal` | `AbortSignal` | No | External abort signal. If already aborted before an attempt, `FetchRetrierAlreadyAbortedError` is thrown. If aborted during an attempt, the in-flight request is aborted: the last attempt fails with `FetchRetrierAbortError`; remaining attempts fail with `FetchRetrierAlreadyAbortedError` without waiting out backoff. If aborted during a full-jitter or `Retry-After` wait, the wait ends immediately and `FetchRetrierAlreadyAbortedError` is thrown. Distinct from `timeoutMs`, which retries remaining attempts and then throws `FetchRetrierAbortError`. |
@@ -217,7 +219,10 @@ try {
 |--------|-------------|
 | `defaultShouldRetry` | Default `shouldRetry` predicate; compose with custom logic. |
 | `DEFAULT_RETRYABLE_HTTP_STATUSES` | Readonly list of HTTP status codes retried by default. |
-| `parseRetryAfterMs` | Parses a `Retry-After` header (delta-seconds or HTTP-date) into a delay in milliseconds. |
+| `parseRetryAfterMs` | Parses a `Retry-After` header (delta-seconds or HTTP-date) into a delay in milliseconds. Pass `ParseRetryAfterOptions` (`{ nowMs }`) to inject the current time. Overflowing delta-seconds are unparsable. |
+| `ParseRetryAfterOptions` | Options for `parseRetryAfterMs`. `nowMs` is the current time in milliseconds and defaults to `Date.now()` when omitted. |
+
+`parseRetryAfterMs(value, nowMs)` still works.
 
 ## Requirements
 

@@ -4,3 +4,4 @@
  * The implementation stays in core because HTTP retry delay selection uses the same function.
  */
 export { parseRetryAfterMs } from './core/backoff/retry-after';
+export type { ParseRetryAfterOptions } from './core/backoff/retry-after';
