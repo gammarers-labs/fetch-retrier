@@ -12,6 +12,15 @@ import {
   parseRetryAfterMs,
   RequestOptions,
 } from '../src';
+import { isLastAttempt } from '../src/core/retry-predicates';
+
+jest.mock('../src/core/retry-predicates', () => {
+  const actual = jest.requireActual('../src/core/retry-predicates') as typeof import('../src/core/retry-predicates');
+  return {
+    ...actual,
+    isLastAttempt: jest.fn((attempt: number, retries: number) => actual.isLastAttempt(attempt, retries)),
+  };
+});
 
 const baseOptions: RequestOptions = {
   retries: 3,
@@ -68,6 +77,7 @@ describe('fetchRetrier', () => {
     globalThis.fetch = originalFetch;
     jest.useRealTimers();
     jest.restoreAllMocks();
+    jest.mocked(isLastAttempt).mockImplementation((attempt: number, retries: number) => attempt === retries);
   });
 
   it('should return the response when res.ok is true', async () => {
@@ -420,6 +430,29 @@ describe('fetchRetrier', () => {
     globalThis.fetch = jest.fn().mockRejectedValue(new Error('Something else'));
 
     await expect(fetchRetrier('https://example.com', baseOptions)).rejects.toThrow('Something else');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should throw FetchRetrierUnreachableError when the attempt loop ends without a response', async () => {
+    jest.useFakeTimers();
+    jest.mocked(isLastAttempt).mockReturnValue(false);
+    const retryRes = {
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve('rate limited'),
+      headers: headersWith({}),
+    } as unknown as Response;
+    globalThis.fetch = jest.fn().mockResolvedValue(retryRes);
+
+    const promise = fetchRetrier('https://example.com', {
+      ...baseOptions,
+      retries: 1,
+      baseBackoffMs: 0,
+    });
+    const assertion = expect(promise).rejects.toBeInstanceOf(FetchRetrierUnreachableError);
+    await jest.advanceTimersByTimeAsync(0);
+    await assertion;
+
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
